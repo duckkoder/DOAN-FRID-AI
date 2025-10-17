@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  ai-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=AI-Service
+      - LOG_LEVEL=INFO
+      - JWT_SECRET=docker-secret-key-change-in-production
+      - JWT_AUDIENCE=ai-service
+      - JWT_ISSUER=docker-issuer
+    volumes:
+      - ../app:/app/app  # For development - mount source code
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # TODO: Thêm các services khác nếu cần (Redis, MinIO, etc.)
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   restart: unless-stopped
+
+  # minio:
+  #   image: minio/minio:latest
+  #   ports:
+  #     - "9000:9000"
+  #     - "9001:9001"
+  #   environment:
+  #     - MINIO_ROOT_USER=minioadmin
+  #     - MINIO_ROOT_PASSWORD=minioadmin
+  #   command: server /data --console-address ":9001"
+  #   volumes:
+  #     - minio_data:/data
+  #   restart: unless-stopped
+
+# volumes:
+#   minio_data:

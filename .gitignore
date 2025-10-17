@@ -1,0 +1,6 @@
+# Bỏ qua cache của Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+.env
