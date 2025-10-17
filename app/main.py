@@ -15,7 +15,70 @@ async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
     configure_logging()
+    
+    # Import logger trước để dùng trong exception handler
+    from app.core.logging import get_logger
+    from pathlib import Path
+    logger = get_logger(__name__)
+    
+    # Khởi tạo face detection và recognition services (nếu có config)
+    try:
+        from app.services.face_detection_service import initialize_face_detection_service
+        from app.services.face_recognition_service import initialize_face_recognition_service
+        from app.services.embedding_manager import embedding_manager
+        from app.services.face_engine import initialize_face_engine
+        
+        # Initialize detector
+        detector_service = None
+        if settings.DETECTOR_CHECKPOINT:
+            try:
+                detector_service = initialize_face_detection_service()
+                logger.info("Face detection service initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize face detection service: {e}")
+        
+        # Initialize recognizer
+        recognizer_service = None
+        if settings.RECOGNIZER_CHECKPOINT:
+            try:
+                recognizer_service = initialize_face_recognition_service()
+                logger.info("Face recognition service initialized")
+                
+                # Load embeddings if embedding_dir exists
+                if settings.EMBEDDING_DIR:
+                    embedding_path = Path(settings.EMBEDDING_DIR)
+                    if embedding_path.exists():
+                        try:
+                            recognizer_service.load_embedding_directory(embedding_path)
+                            stats = recognizer_service.get_database_stats()
+                            logger.info(
+                                "Embeddings loaded on startup",
+                                num_people=stats["num_people"],
+                                total_vectors=stats["total_vectors"]
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to load embeddings: {e}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to initialize face recognition service: {e}")
+        
+        # Initialize face engine
+        if detector_service or recognizer_service:
+            initialize_face_engine(
+                detector_service=detector_service,
+                recognizer_service=recognizer_service,
+                embedding_manager=embedding_manager
+            )
+            logger.info("Face engine initialized")
+        else:
+            logger.warning("No face services initialized - running in API-only mode")
+        
+    except Exception as e:
+        logger.error(f"Startup initialization error: {e}")
+        logger.warning("Services not initialized - API will run in limited mode")
+    
     yield
+    
     # Shutdown
     pass
 

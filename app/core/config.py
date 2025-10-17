@@ -37,6 +37,50 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     
+    # Face Detection settings
+    DETECTOR_CHECKPOINT: Optional[str] = None
+    DETECTOR_CONF_THRESHOLD: float = 0.75
+    DETECTOR_NMS_THRESHOLD: float = 0.4
+    DETECTOR_DEVICE: str = "cuda"
+    DETECTOR_PAD: int = 10
+    
+    # Face Recognition settings
+    RECOGNIZER_CHECKPOINT: Optional[str] = None
+    RECOGNIZER_DEVICE: str = "cuda"
+    RECOGNIZER_THRESHOLD: float = 1.5
+    RECOGNIZER_KNN_K: int = 5
+    RECOGNIZER_MIN_CONFIDENCE: float = 0.5
+    RECOGNIZER_MIN_VOTE_RATIO: float = 0.5
+    RECOGNIZER_REQUIRE_STABLE: bool = False
+    
+    # Dynamic threshold settings
+    REC_ENABLE_DYNAMIC_THRESHOLD: bool = True
+    REC_IDENTITY_QUANTILE: float = 0.9
+    REC_IDENTITY_MARGIN: float = 0.15
+    REC_IDENTITY_MIN_SCALE: float = 0.7
+    REC_IDENTITY_MAX_SCALE: float = 2.01
+    
+    # Quality filtering
+    ENABLE_QUALITY_FILTER: bool = False
+    QUALITY_THRESHOLD: float = 0.35
+    
+    # Temporal smoothing
+    ENABLE_TEMPORAL_SMOOTHING: bool = True
+    TEMPORAL_WINDOW_SIZE: int = 5
+    
+    # TTA (Test Time Augmentation)
+    TTA_ENABLED: bool = False
+    TTA_MODE: str = "basic"  # "basic" or "advanced"
+    
+    # Embedding storage
+    EMBEDDING_DIR: Optional[str] = None
+    DATABASE_DIR: Optional[str] = None
+    
+    # Registration settings
+    REGISTRATION_MIN_CONFIDENCE: float = 0.55
+    REGISTRATION_AUGMENTATIONS: int = 5
+    SAVE_REGISTRATION_IMAGES: bool = True
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

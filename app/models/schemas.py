@@ -89,3 +89,62 @@ class ErrorResponse(BaseModel):
     message: str = Field(..., description="Thông báo lỗi")
     details: Optional[Dict[str, Any]] = Field(None, description="Chi tiết lỗi")
     timestamp: datetime = Field(..., description="Thời gian xảy ra lỗi")
+
+
+# Registration schemas
+class RegistrationRequest(BaseModel):
+    """Request để đăng ký người dùng mới"""
+    person_name: str = Field(..., description="Tên người cần đăng ký")
+    image_base64: str = Field(..., description="Ảnh encoded base64")
+    min_confidence: Optional[float] = Field(None, description="Ngưỡng confidence tối thiểu")
+    augmentations: Optional[int] = Field(None, description="Số lượng ảnh augmented")
+    save_image: Optional[bool] = Field(True, description="Có lưu ảnh crop không")
+
+
+class RegistrationResponse(BaseModel):
+    """Response sau khi đăng ký người dùng"""
+    success: bool = Field(..., description="Trạng thái đăng ký")
+    message: str = Field(..., description="Thông báo kết quả")
+    identity: str = Field(..., description="Tên đã được làm sạch")
+    embeddings_saved: int = Field(..., description="Số embeddings đã lưu")
+    detection_confidence: Optional[float] = Field(None, description="Độ tin cậy detection")
+    timestamp: datetime = Field(..., description="Thời gian đăng ký")
+
+
+class BatchRegistrationRequest(BaseModel):
+    """Request để đăng ký hàng loạt từ thư mục"""
+    source_dir: str = Field(..., description="Đường dẫn thư mục nguồn")
+    min_images: Optional[int] = Field(1, description="Số ảnh tối thiểu cho mỗi người")
+    augmentations: Optional[int] = Field(None, description="Số ảnh augmented")
+
+
+class BatchRegistrationResponse(BaseModel):
+    """Response sau khi đăng ký hàng loạt"""
+    success: bool = Field(..., description="Trạng thái")
+    message: str = Field(..., description="Thông báo")
+    stats: Dict[str, int] = Field(..., description="Thống kê {identity: num_embeddings}")
+    total_people: int = Field(..., description="Tổng số người đã đăng ký")
+    total_embeddings: int = Field(..., description="Tổng số embeddings")
+    timestamp: datetime = Field(..., description="Thời gian hoàn thành")
+
+
+# Embedding management schemas
+class EmbeddingStats(BaseModel):
+    """Thống kê embeddings database"""
+    num_people: int = Field(..., description="Số lượng người trong database")
+    total_vectors: int = Field(..., description="Tổng số vectors")
+    timestamp: datetime = Field(..., description="Thời gian lấy thống kê")
+
+
+class RefreshDatabaseRequest(BaseModel):
+    """Request để refresh database"""
+    embedding_dir: Optional[str] = Field(None, description="Đường dẫn thư mục embeddings")
+
+
+class RefreshDatabaseResponse(BaseModel):
+    """Response sau khi refresh database"""
+    success: bool = Field(..., description="Trạng thái")
+    message: str = Field(..., description="Thông báo")
+    num_people: int = Field(..., description="Số người trong database")
+    total_vectors: int = Field(..., description="Tổng số vectors")
+    timestamp: datetime = Field(..., description="Thời gian refresh")

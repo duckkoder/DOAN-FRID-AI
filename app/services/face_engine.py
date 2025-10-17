@@ -1,88 +1,182 @@
 """
-Face Engine - Interface và stub cho face detection/recognition
+Face Engine - Orchestrator cho face detection và recognition services
 """
-import random
-from typing import List, Optional, Tuple
-from datetime import datetime, timezone
+import base64
+import io
+from typing import List, Optional, Dict, Any
+from pathlib import Path
+import numpy as np
+import cv2
+from PIL import Image
 
 from app.models.schemas import Detection
 from app.core.logging import LoggerMixin
+from app.core.config import settings
 
 
 class FaceEngine(LoggerMixin):
     """
-    Face detection và recognition engine
-    TODO: Thay thế bằng implementation thật sử dụng AI models
+    Face detection và recognition engine orchestrator
+    Kết hợp các services: detection, recognition, embedding management
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        detector_service=None,
+        recognizer_service=None,
+        embedding_manager=None
+    ):
+        """
+        Khởi tạo FaceEngine
+        
+        Args:
+            detector_service: FaceDetectionService instance (optional)
+            recognizer_service: FaceRecognitionService instance (optional)
+            embedding_manager: EmbeddingManager instance (optional)
+        """
         super().__init__()
+        
+        self.detector = detector_service
+        self.recognizer = recognizer_service
+        self.embedding_manager = embedding_manager
         self._next_track_id = 1
-        self.logger.info("FaceEngine initialized (STUB)")
+        
+        self.logger.info(
+            "FaceEngine initialized",
+            has_detector=self.detector is not None,
+            has_recognizer=self.recognizer is not None,
+            has_embedding_manager=self.embedding_manager is not None
+        )
     
     async def detect_faces(self, frame_data: Optional[bytes] = None) -> List[Detection]:
         """
         Detect faces trong frame
         
         Args:
-            frame_data: Raw frame data (stub - không sử dụng thật)
+            frame_data: Raw frame data (bytes hoặc base64)
             
         Returns:
             Danh sách detections
-            
-        TODO: Implement thật với AI model (YOLO, RetinaFace, etc.)
         """
-        # Stub: Tạo random detections
-        num_faces = random.randint(0, 5)
-        detections = []
+        if self.detector is None:
+            self.logger.warning("Detector not initialized - returning empty list")
+            return []
         
-        for _ in range(num_faces):
-            # Random bounding box
-            x1 = random.uniform(0, 800)
-            y1 = random.uniform(0, 600)
-            x2 = x1 + random.uniform(50, 200)
-            y2 = y1 + random.uniform(50, 200)
+        try:
+            # Convert frame_data to numpy array
+            if frame_data is None:
+                # Return empty if no data
+                return []
             
-            detection = Detection(
-                bbox=[x1, y1, x2, y2],
-                confidence=random.uniform(0.7, 0.99),
-                track_id=self._next_track_id
+            # Decode image from bytes
+            image_array = np.frombuffer(frame_data, dtype=np.uint8)
+            image_bgr = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            
+            if image_bgr is None:
+                self.logger.warning("Failed to decode image")
+                return []
+            
+            # Convert BGR to RGB
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            
+            # Detect faces
+            detections, _, _ = await self.detector.detect_faces_async(
+                image_rgb,
+                return_crops=False
             )
             
-            self._next_track_id += 1
-            detections.append(detection)
-        
-        self.logger.debug(f"Detected {len(detections)} faces (STUB)")
-        return detections
+            # Convert to API Detection schema
+            api_detections = []
+            for det in detections:
+                api_det = Detection(
+                    bbox=[float(x) for x in det.bbox],
+                    confidence=float(det.confidence),
+                    track_id=self._next_track_id
+                )
+                self._next_track_id += 1
+                api_detections.append(api_det)
+            
+            self.logger.debug(f"Detected {len(api_detections)} faces")
+            return api_detections
+            
+        except Exception as e:
+            self.logger.error("Face detection failed", error=str(e))
+            return []
     
-    async def recognize_faces(self, detections: List[Detection], embeddings_db: dict) -> List[Detection]:
+    async def recognize_faces(
+        self,
+        detections: List[Detection],
+        embeddings_db: dict,
+        frame_data: Optional[bytes] = None
+    ) -> List[Detection]:
         """
         Nhận diện faces dựa trên embeddings database
         
         Args:
             detections: Danh sách detections từ detect_faces
-            embeddings_db: Database embeddings (stub)
+            embeddings_db: Database embeddings (dict)
+            frame_data: Raw frame data để crop faces
             
         Returns:
             Danh sách detections với thông tin recognition
-            
-        TODO: Implement thật với face recognition model (ArcFace, FaceNet, etc.)
         """
-        # Stub student IDs
-        stub_student_ids = ["SV001", "SV002", "SV003", "SV004", "SV005"]
+        if self.recognizer is None:
+            self.logger.warning("Recognizer not initialized")
+            return detections
         
-        for detection in detections:
-            # Random recognition (50% chance)
-            if random.random() > 0.5:
-                detection.student_id = random.choice(stub_student_ids)
-                detection.recognition_confidence = random.uniform(0.6, 0.95)
+        if not embeddings_db:
+            self.logger.warning("Embeddings database is empty")
+            return detections
         
-        recognized_count = sum(1 for d in detections if d.student_id)
-        self.logger.debug(f"Recognized {recognized_count}/{len(detections)} faces (STUB)")
+        if frame_data is None:
+            self.logger.warning("No frame data for face crops")
+            return detections
         
-        return detections
+        try:
+            # Decode image
+            image_array = np.frombuffer(frame_data, dtype=np.uint8)
+            image_bgr = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            
+            # Crop and recognize each face
+            for detection in detections:
+                try:
+                    # Crop face from bbox
+                    x1, y1, x2, y2 = [int(x) for x in detection.bbox]
+                    face_crop = image_rgb[y1:y2, x1:x2]
+                    
+                    if face_crop.size == 0:
+                        continue
+                    
+                    # Identify face
+                    identity = await self.recognizer.identify_async(face_crop)
+                    
+                    if identity and identity.get('person') != 'Unknown':
+                        detection.student_id = identity.get('person')
+                        detection.recognition_confidence = float(identity.get('confidence', 0.0))
+                    
+                except Exception as e:
+                    self.logger.warning(
+                        "Failed to recognize face",
+                        track_id=detection.track_id,
+                        error=str(e)
+                    )
+                    continue
+            
+            recognized_count = sum(1 for d in detections if d.student_id)
+            self.logger.debug(f"Recognized {recognized_count}/{len(detections)} faces")
+            
+            return detections
+            
+        except Exception as e:
+            self.logger.error("Face recognition failed", error=str(e))
+            return detections
     
-    async def extract_embeddings(self, frame_data: bytes, bbox: List[float]) -> Optional[List[float]]:
+    async def extract_embeddings(
+        self,
+        frame_data: bytes,
+        bbox: List[float]
+    ) -> Optional[List[float]]:
         """
         Trích xuất face embeddings từ bounding box
         
@@ -92,40 +186,126 @@ class FaceEngine(LoggerMixin):
             
         Returns:
             Face embedding vector hoặc None
-            
-        TODO: Implement với face embedding model
         """
-        # Stub: Trả về random embedding vector
-        embedding_size = 512
-        embedding = [random.uniform(-1, 1) for _ in range(embedding_size)]
+        if self.recognizer is None:
+            self.logger.warning("Recognizer not initialized")
+            return None
         
-        self.logger.debug("Extracted face embedding (STUB)", bbox=bbox)
-        return embedding
+        try:
+            # Decode image
+            image_array = np.frombuffer(frame_data, dtype=np.uint8)
+            image_bgr = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            
+            # Crop face
+            x1, y1, x2, y2 = [int(x) for x in bbox]
+            face_crop = image_rgb[y1:y2, x1:x2]
+            
+            if face_crop.size == 0:
+                return None
+            
+            # Extract features
+            embedding = self.recognizer.extract_features(face_crop)
+            
+            self.logger.debug("Extracted face embedding", bbox=bbox)
+            return embedding.squeeze(0).tolist()
+            
+        except Exception as e:
+            self.logger.error("Embedding extraction failed", error=str(e))
+            return None
     
     async def load_embeddings_from_data(self, embeddings_data: bytes) -> dict:
         """
         Load embeddings database từ data (từ S3)
         
         Args:
-            embeddings_data: Raw embeddings data
+            embeddings_data: Raw embeddings data (npz format)
             
         Returns:
             Dictionary mapping student_id -> embedding
-            
-        TODO: Implement load từ numpy file hoặc format khác
         """
-        # Stub: Tạo fake embeddings database
-        stub_embeddings = {}
-        stub_student_ids = ["SV001", "SV002", "SV003", "SV004", "SV005"]
+        try:
+            # Load from npz bytes
+            buffer = io.BytesIO(embeddings_data)
+            data = np.load(buffer)
+            
+            embeddings_db = {key: data[key] for key in data.keys()}
+            
+            self.logger.info(f"Loaded embeddings for {len(embeddings_db)} students")
+            return embeddings_db
+            
+        except Exception as e:
+            self.logger.error("Failed to load embeddings", error=str(e))
+            return {}
+    
+    def load_embeddings_from_directory(self, embedding_dir: Path) -> dict:
+        """
+        Load embeddings từ thư mục
         
-        for student_id in stub_student_ids:
-            # Random embedding vector
-            embedding = [random.uniform(-1, 1) for _ in range(512)]
-            stub_embeddings[student_id] = embedding
+        Args:
+            embedding_dir: Đường dẫn thư mục chứa embeddings
+            
+        Returns:
+            Database dictionary
+        """
+        if self.recognizer is None:
+            self.logger.warning("Recognizer not initialized")
+            return {}
         
-        self.logger.info(f"Loaded embeddings for {len(stub_embeddings)} students (STUB)")
-        return stub_embeddings
+        try:
+            database = self.recognizer.load_embedding_directory(embedding_dir)
+            return database
+        except Exception as e:
+            self.logger.error("Failed to load embeddings from directory", error=str(e))
+            return {}
+    
+    def get_database_stats(self) -> Dict[str, int]:
+        """Lấy thống kê database"""
+        if self.recognizer is None:
+            return {"num_people": 0, "total_vectors": 0}
+        
+        return self.recognizer.get_database_stats()
 
 
 # Global face engine instance
-face_engine = FaceEngine()
+face_engine: Optional[FaceEngine] = None
+
+
+def initialize_face_engine(
+    detector_service=None,
+    recognizer_service=None,
+    embedding_manager=None
+) -> FaceEngine:
+    """
+    Khởi tạo global face engine
+    
+    Args:
+        detector_service: FaceDetectionService instance
+        recognizer_service: FaceRecognitionService instance
+        embedding_manager: EmbeddingManager instance
+        
+    Returns:
+        FaceEngine instance
+    """
+    global face_engine
+    face_engine = FaceEngine(
+        detector_service=detector_service,
+        recognizer_service=recognizer_service,
+        embedding_manager=embedding_manager
+    )
+    return face_engine
+
+
+def get_face_engine() -> FaceEngine:
+    """
+    Lấy global face engine instance
+    
+    Returns:
+        FaceEngine instance
+        
+    Raises:
+        RuntimeError: Nếu face engine chưa được khởi tạo
+    """
+    if face_engine is None:
+        raise RuntimeError("FaceEngine chưa được khởi tạo. Gọi initialize_face_engine() trước.")
+    return face_engine
