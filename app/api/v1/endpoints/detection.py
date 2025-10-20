@@ -111,6 +111,12 @@ async def detect_faces(request: DetectRequest):
             return_crops=True
         )
         
+        # Handle None results
+        if detections is None:
+            detections = []
+        if crops is None:
+            crops = []
+        
         logger.info(f"Detected {len(detections)} faces")
         
         # Recognize faces

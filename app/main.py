@@ -101,7 +101,7 @@ app.add_middleware(
 )
 
 # Include API v1 router
-app.include_router(api_router, prefix="/api_ai/v1")
+app.include_router(api_router, prefix="/api/v1")
 
 
 @app.get("/")
