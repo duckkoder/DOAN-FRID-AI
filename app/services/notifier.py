@@ -59,8 +59,6 @@ class BackendNotifier(LoggerMixin):
             
         Returns:
             True nếu gửi thành công, False nếu thất bại
-            
-        TODO: Implement retry với exponential backoff
         """
         logger = self.get_contextual_logger(session_id=session_id)
         
@@ -68,26 +66,44 @@ class BackendNotifier(LoggerMixin):
             logger.error("HTTP client not initialized")
             return False
         
-        # TODO: Implement thật - hiện tại chỉ là stub
         try:
-            logger.info("Sending attendance update (STUB)", callback_url=callback_url)
+            logger.info("Sending attendance update to backend", callback_url=callback_url)
             
-            # Stub: Giả lập gửi request
-            await asyncio.sleep(0.1)  # Simulate network delay
+            # Prepare payload
+            payload = {
+                "session_id": attendance_data.session_id,
+                "class_id": attendance_data.class_id,
+                "recognized_students": attendance_data.recognized_students,
+                "timestamp": attendance_data.timestamp,
+                "total_faces_detected": attendance_data.total_faces_detected
+            }
             
-            # Stub: Random success/failure
-            import random
-            success = random.random() > 0.1  # 90% success rate
+            # Send POST request to backend webhook
+            response = await self.client.post(
+                callback_url,
+                json=payload,
+                timeout=10.0
+            )
             
-            if success:
-                logger.info("Attendance update sent successfully (STUB)")
+            if response.status_code == 200:
+                logger.info("Attendance update sent successfully", 
+                           status_code=response.status_code,
+                           response_text=response.text)
                 return True
             else:
-                logger.error("Failed to send attendance update (STUB)")
+                logger.error("Failed to send attendance update", 
+                           status_code=response.status_code,
+                           response_text=response.text)
                 return False
                 
+        except httpx.TimeoutException as e:
+            logger.error("Timeout sending attendance update", error=str(e))
+            return False
+        except httpx.RequestError as e:
+            logger.error("Request error sending attendance update", error=str(e))
+            return False
         except Exception as e:
-            logger.error("Error sending attendance update", error=str(e))
+            logger.error("Unexpected error sending attendance update", error=str(e))
             return False
     
     async def send_attendance_update_with_retry(
