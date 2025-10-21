@@ -3,8 +3,9 @@ Face Engine - Orchestrator cho face detection và recognition services
 """
 import base64
 import io
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from pathlib import Path
+from datetime import datetime, timezone
 import numpy as np
 import cv2
 from PIL import Image
@@ -17,14 +18,15 @@ from app.core.config import settings
 class FaceEngine(LoggerMixin):
     """
     Face detection và recognition engine orchestrator
-    Kết hợp các services: detection, recognition, embedding management
+    Kết hợp các services: detection, recognition, embedding management, validation
     """
     
     def __init__(
         self,
         detector_service=None,
         recognizer_service=None,
-        embedding_manager=None
+        embedding_manager=None,
+        recognition_validator=None
     ):
         """
         Khởi tạo FaceEngine
@@ -33,19 +35,22 @@ class FaceEngine(LoggerMixin):
             detector_service: FaceDetectionService instance (optional)
             recognizer_service: FaceRecognitionService instance (optional)
             embedding_manager: EmbeddingManager instance (optional)
+            recognition_validator: RecognitionValidator instance (optional)
         """
         super().__init__()
         
         self.detector = detector_service
         self.recognizer = recognizer_service
         self.embedding_manager = embedding_manager
+        self.validator = recognition_validator
         self._next_track_id = 1
         
         self.logger.info(
             "FaceEngine initialized",
             has_detector=self.detector is not None,
             has_recognizer=self.recognizer is not None,
-            has_embedding_manager=self.embedding_manager is not None
+            has_embedding_manager=self.embedding_manager is not None,
+            has_validator=self.validator is not None
         )
     
     async def detect_faces(self, frame_data: Optional[bytes] = None) -> List[Detection]:
@@ -265,6 +270,55 @@ class FaceEngine(LoggerMixin):
             return {"num_people": 0, "total_vectors": 0}
         
         return self.recognizer.get_database_stats()
+    
+    async def update_recognition_history(
+        self,
+        detections: List[Detection],
+        timestamp: datetime
+    ):
+        """
+        Cập nhật lịch sử nhận diện vào validator
+        
+        Args:
+            detections: Danh sách detections với recognition info
+            timestamp: Thời điểm nhận diện
+        """
+        if self.validator is None:
+            return
+        
+        for detection in detections:
+            if detection.track_id is not None:
+                await self.validator.add_recognition(
+                    track_id=detection.track_id,
+                    student_id=detection.student_id,
+                    confidence=detection.recognition_confidence or 0.0,
+                    timestamp=timestamp
+                )
+    
+    async def get_validated_students(
+        self,
+        current_time: datetime
+    ) -> Set[str]:
+        """
+        Lấy danh sách sinh viên đã được validated (pass tất cả điều kiện)
+        
+        Args:
+            current_time: Thời điểm hiện tại
+            
+        Returns:
+            Set các student_id đã được validated và chưa gửi callback
+        """
+        if self.validator is None:
+            self.logger.warning("Validator not initialized")
+            return set()
+        
+        # Cleanup old confirmations
+        self.validator.cleanup_old_confirmations(current_time)
+        
+        # Lấy các sinh viên mới được validated
+        validated_students = await self.validator.get_newly_confirmed_students(current_time)
+        
+        return validated_students
 
 
 # Global face engine instance
@@ -274,7 +328,8 @@ face_engine: Optional[FaceEngine] = None
 def initialize_face_engine(
     detector_service=None,
     recognizer_service=None,
-    embedding_manager=None
+    embedding_manager=None,
+    recognition_validator=None
 ) -> FaceEngine:
     """
     Khởi tạo global face engine
@@ -283,6 +338,7 @@ def initialize_face_engine(
         detector_service: FaceDetectionService instance
         recognizer_service: FaceRecognitionService instance
         embedding_manager: EmbeddingManager instance
+        recognition_validator: RecognitionValidator instance
         
     Returns:
         FaceEngine instance
@@ -291,7 +347,8 @@ def initialize_face_engine(
     face_engine = FaceEngine(
         detector_service=detector_service,
         recognizer_service=recognizer_service,
-        embedding_manager=embedding_manager
+        embedding_manager=embedding_manager,
+        recognition_validator=recognition_validator
     )
     return face_engine
 

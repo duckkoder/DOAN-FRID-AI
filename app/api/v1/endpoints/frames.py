@@ -3,7 +3,7 @@ Frame processing endpoints
 """
 import base64
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Set
 
 from fastapi import APIRouter, HTTPException, status, Depends
 
@@ -12,6 +12,7 @@ from app.services.session_manager import session_manager
 from app.services.face_engine import face_engine
 from app.services.tracker import face_tracker
 from app.services.notifier import backend_notifier
+from app.services.recognition_validator import get_recognition_validator
 from app.core.security import get_current_user
 from app.core.logging import get_logger
 
@@ -74,22 +75,32 @@ async def process_frame(
                 request_logger.warning("Failed to decode frame", error=str(e))
                 # Tiếp tục xử lý với frame_data = None
         
-        # Face detection (stub)
+        current_time = datetime.now(timezone.utc)
+        
+        # Face detection
         detections = await face_engine.detect_faces(frame_data)
         request_logger.debug("Face detection completed", num_faces=len(detections))
         
-        # Face recognition (stub)
+        # Face recognition
         # TODO: Load embeddings từ session
         embeddings_db = {}  # Stub empty embeddings
-        detections = await face_engine.recognize_faces(detections, embeddings_db)
+        detections = await face_engine.recognize_faces(detections, embeddings_db, frame_data)
         
-        # Face tracking (stub)
+        # Face tracking - gán track_id cho mỗi detection
         detections = await face_tracker.update(detections)
+        
+        # **CƠ CHẾ MỚI: Cập nhật recognition history vào validator**
+        await face_engine.update_recognition_history(detections, current_time)
+        
+        # **CƠ CHẾ MỚI: Chỉ lấy sinh viên đã được VALIDATED**
+        # (pass đủ điều kiện: confirmation threshold, avg confidence, success rate)
+        validated_student_ids: Set[str] = await face_engine.get_validated_students(current_time)
         
         # Tăng frame counter
         await session_manager.increment_frame_count(session_id)
         
         # Chuẩn bị response
+        # recognized_student_ids: tất cả sinh viên được nhận diện trong frame này
         recognized_student_ids = [
             d.student_id for d in detections 
             if d.student_id is not None
@@ -99,20 +110,21 @@ async def process_frame(
             session_id=session_id,
             timestamp=request.timestamp,
             client_seq=request.client_seq,
-            processed_at=datetime.now(timezone.utc),
+            processed_at=current_time,
             detections=detections,
             recognized_student_ids=recognized_student_ids,
             total_faces=len(detections),
             callback_sent=False
         )
         
-        # Gửi callback nếu có sinh viên được nhận diện
-        if recognized_student_ids:
+        # **CƠ CHẾ MỚI: Chỉ gửi callback cho sinh viên đã được VALIDATED**
+        # Không còn tin ngay vào kết quả nhận diện đầu tiên
+        if validated_student_ids:
             attendance_data = AttendanceUpdate(
                 session_id=session_id,
                 class_id=session.class_id,
                 timestamp=request.timestamp,
-                recognized_students=recognized_student_ids,
+                recognized_students=list(validated_student_ids),
                 total_faces_detected=len(detections)
             )
             
@@ -124,11 +136,18 @@ async def process_frame(
                 request_logger
             )
             response.callback_sent = callback_success
+            
+            request_logger.info(
+                "Validated students confirmed",
+                validated_students=list(validated_student_ids),
+                validation_passed=True
+            )
         
         request_logger.info(
             "Frame processed successfully",
             total_faces=len(detections),
             recognized_students=len(recognized_student_ids),
+            validated_students=len(validated_student_ids),
             callback_sent=response.callback_sent
         )
         

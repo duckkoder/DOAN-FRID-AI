@@ -2,11 +2,20 @@
 Object Tracker - Interface và stub cho face tracking
 """
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections import deque
 
 from app.models.schemas import Detection
 from app.core.logging import LoggerMixin
+
+
+@dataclass
+class RecognitionRecord:
+    """Bản ghi nhận diện cho một frame"""
+    student_id: Optional[str]
+    confidence: float
+    timestamp: datetime
 
 
 @dataclass
@@ -16,11 +25,72 @@ class TrackState:
     last_bbox: List[float]
     last_seen: datetime
     student_id: Optional[str] = None
-    confidence_history: List[float] = None
+    confidence_history: List[float] = field(default_factory=list)
     
-    def __post_init__(self):
-        if self.confidence_history is None:
-            self.confidence_history = []
+    # Recognition buffer - lưu lịch sử nhận diện
+    recognition_history: deque = field(default_factory=lambda: deque(maxlen=10))
+    
+    # Confirmed student ID sau validation
+    confirmed_student_id: Optional[str] = None
+    confirmed_at: Optional[datetime] = None
+    
+    # Metrics
+    total_recognitions: int = 0
+    successful_recognitions: int = 0
+    
+    def add_recognition(self, student_id: Optional[str], confidence: float, timestamp: datetime):
+        """Thêm một bản ghi nhận diện vào history"""
+        record = RecognitionRecord(
+            student_id=student_id,
+            confidence=confidence,
+            timestamp=timestamp
+        )
+        self.recognition_history.append(record)
+        self.total_recognitions += 1
+        if student_id is not None:
+            self.successful_recognitions += 1
+    
+    def get_recent_recognitions(self, window_size: int = 5) -> List[RecognitionRecord]:
+        """Lấy N bản ghi nhận diện gần nhất"""
+        history_list = list(self.recognition_history)
+        return history_list[-window_size:] if history_list else []
+    
+    def get_recognition_stats(self, window_size: int = 5) -> Dict:
+        """Tính toán thống kê nhận diện trong window"""
+        recent = self.get_recent_recognitions(window_size)
+        
+        if not recent:
+            return {
+                "total_frames": 0,
+                "successful_frames": 0,
+                "success_rate": 0.0,
+                "avg_confidence": 0.0,
+                "dominant_student_id": None
+            }
+        
+        successful = [r for r in recent if r.student_id is not None]
+        
+        # Tìm student_id xuất hiện nhiều nhất
+        student_id_counts = {}
+        for r in successful:
+            student_id_counts[r.student_id] = student_id_counts.get(r.student_id, 0) + 1
+        
+        dominant_student_id = max(student_id_counts.items(), key=lambda x: x[1])[0] if student_id_counts else None
+        
+        # Tính confidence trung bình cho dominant student
+        avg_confidence = 0.0
+        if dominant_student_id:
+            confidences = [r.confidence for r in successful if r.student_id == dominant_student_id]
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        
+        return {
+            "total_frames": len(recent),
+            "successful_frames": len(successful),
+            "success_rate": len(successful) / len(recent) if recent else 0.0,
+            "avg_confidence": avg_confidence,
+            "dominant_student_id": dominant_student_id,
+            "dominant_count": student_id_counts.get(dominant_student_id, 0) if dominant_student_id else 0
+        }
 
 
 class FaceTracker(LoggerMixin):

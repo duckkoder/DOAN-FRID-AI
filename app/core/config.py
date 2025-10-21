@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     TTA_ENABLED: bool = False
     TTA_MODE: str = "basic"  # "basic" or "advanced"
     
+    # Recognition Validation Settings (Anti-premature detection)
+    # Số lần nhận diện tối thiểu để xác nhận (VD: 3 lần trong 5 frame)
+    RECOGNITION_CONFIRMATION_THRESHOLD: int = 3
+    # Số frame gần nhất để xem xét
+    RECOGNITION_WINDOW_SIZE: int = 5
+    # Confidence score trung bình tối thiểu để xác nhận
+    RECOGNITION_MIN_AVG_CONFIDENCE: float = 0.55
+    # Tỷ lệ nhận diện thành công tối thiểu (3/5 = 0.6)
+    RECOGNITION_MIN_SUCCESS_RATE: float = 0.60
+    # Thời gian debounce để tránh gửi callback lặp lại (giây)
+    RECOGNITION_DEBOUNCE_SECONDS: int = 30
+    
     # Embedding storage
     EMBEDDING_DIR: Optional[str] = None
     DATABASE_DIR: Optional[str] = None
