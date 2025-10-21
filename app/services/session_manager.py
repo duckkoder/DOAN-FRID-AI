@@ -4,16 +4,19 @@ Session Manager - Quản lý sessions in-memory
 import asyncio
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Optional, List
-from dataclasses import dataclass
+from typing import Dict, Optional, List, Any
+from dataclasses import dataclass, field
+import torch
+import numpy as np
 
 from app.models.schemas import SessionCreateRequest, SessionResponse, S3Config
 from app.core.logging import LoggerMixin
+from app.services.database_service import get_database_service
 
 
 @dataclass
 class SessionData:
-    """Dữ liệu session lưu trong memory"""
+    """Dữ liệu session lưu trong memory với embeddings loaded vào VRAM"""
     session_id: str
     class_id: str
     backend_callback_url: str
@@ -23,6 +26,13 @@ class SessionData:
     embeddings_loaded: bool = False
     total_frames_processed: int = 0
     max_duration_minutes: int = 60
+    
+    # Embeddings data loaded vào VRAM (GPU memory)
+    gallery_embeddings: Optional[torch.Tensor] = None  # Shape: (N, 512) - N embeddings
+    gallery_labels: Optional[List[str]] = None  # List of student_codes
+    gallery_student_ids: Optional[List[int]] = None  # List of student_ids
+    student_codes: List[str] = field(default_factory=list)  # Original list
+    embedding_count: int = 0  # Total embeddings loaded
 
 
 class SessionManager(LoggerMixin):
@@ -35,10 +45,13 @@ class SessionManager(LoggerMixin):
     
     async def create_session(self, request: SessionCreateRequest) -> SessionResponse:
         """
-        Tạo session mới
+        Tạo session mới và load embeddings vào VRAM.
+        
+        BƯỚC 1: Query embeddings từ pgvector (1 lần DUY NHẤT)
+        BƯỚC 2: Load embeddings vào VRAM (GPU memory)
         
         Args:
-            request: Thông tin tạo session
+            request: Thông tin tạo session với student_codes
             
         Returns:
             Thông tin session đã tạo
@@ -50,31 +63,145 @@ class SessionManager(LoggerMixin):
                 session_id=session_id,
                 class_id=request.class_id,
                 backend_callback_url=request.backend_callback_url,
-                s3_config=request.s3,
+                s3_config=request.s3 or S3Config(bucket="", key=""),
                 status="active",
                 created_at=datetime.now(timezone.utc),
-                max_duration_minutes=request.max_duration_minutes or 60
+                max_duration_minutes=request.max_duration_minutes or 60,
+                student_codes=request.student_codes
             )
             
             self._sessions[session_id] = session_data
             
-            # TODO: Trigger embeddings loading từ S3
-            # Stub: Giả lập load embeddings thành công
-            session_data.embeddings_loaded = True
+            # BƯỚC 1: Query embeddings từ database (1 query duy nhất)
+            try:
+                embeddings_data = await self._load_embeddings_from_database(request.student_codes)
+                
+                # BƯỚC 2: Load vào VRAM
+                await self._load_embeddings_to_vram(session_data, embeddings_data)
+                
+                session_data.embeddings_loaded = True
+                
+                self.logger.info(
+                    "Session created with embeddings loaded to VRAM",
+                    session_id=session_id,
+                    class_id=request.class_id,
+                    student_count=len(request.student_codes),
+                    embedding_count=session_data.embedding_count,
+                    avg_per_student=session_data.embedding_count / len(request.student_codes) if request.student_codes else 0
+                )
             
-            self.logger.info(
-                "Session created",
-                session_id=session_id,
-                class_id=request.class_id,
-                s3_bucket=request.s3.bucket,
-                s3_key=request.s3.key
-            )
+            except Exception as e:
+                session_data.embeddings_loaded = False
+                self.logger.error(
+                    "Failed to load embeddings for session",
+                    session_id=session_id,
+                    error=str(e)
+                )
+                raise
             
             return self._session_data_to_response(session_data)
     
+    async def _load_embeddings_from_database(self, student_codes: List[str]) -> List[Dict[str, Any]]:
+        """
+        BƯỚC 1: Query embeddings từ pgvector (1 lần DUY NHẤT).
+        
+        Args:
+            student_codes: List of student codes
+        
+        Returns:
+            List of embedding dictionaries
+        """
+        self.logger.info("Loading embeddings from database", student_count=len(student_codes))
+        
+        # Run sync database query in thread pool
+        loop = asyncio.get_event_loop()
+        db_service = get_database_service()
+        
+        embeddings_data = await loop.run_in_executor(
+            None,
+            db_service.get_embeddings_by_student_codes,
+            student_codes,
+            "approved"
+        )
+        
+        self.logger.info(
+            "Embeddings loaded from database",
+            embedding_count=len(embeddings_data)
+        )
+        
+        return embeddings_data
+    
+    async def _load_embeddings_to_vram(
+        self,
+        session_data: SessionData,
+        embeddings_data: List[Dict[str, Any]]
+    ) -> None:
+        """
+        BƯỚC 2: Load embeddings vào VRAM (GPU memory).
+        Gộp 500 vectors thành 1 tensor và lưu vào SessionData.
+        
+        Args:
+            session_data: Session data to update
+            embeddings_data: List of embeddings from database
+        """
+        if not embeddings_data:
+            self.logger.warning("No embeddings to load to VRAM")
+            session_data.gallery_embeddings = torch.tensor([]).cuda() if torch.cuda.is_available() else torch.tensor([])
+            session_data.gallery_labels = []
+            session_data.gallery_student_ids = []
+            session_data.embedding_count = 0
+            return
+        
+        # Extract data
+        embeddings_list = []
+        labels_list = []
+        student_ids_list = []
+        
+        for emb_data in embeddings_data:
+            embedding = emb_data['embedding']
+            
+            # Convert to numpy if needed
+            if isinstance(embedding, list):
+                embedding = np.array(embedding, dtype=np.float32)
+            
+            embeddings_list.append(embedding)
+            labels_list.append(emb_data['student_code'])
+            student_ids_list.append(emb_data['student_id'])
+        
+        # Stack into single array: (N, 512)
+        embeddings_array = np.stack(embeddings_list, axis=0)  # Shape: (N, 512)
+        
+        # Convert to torch tensor
+        embeddings_tensor = torch.from_numpy(embeddings_array).float()
+        
+        # ⚠️ CRITICAL: L2 normalization - MUST normalize before comparison
+        # Face embeddings MUST be normalized for distance calculation to work correctly
+        embeddings_tensor = torch.nn.functional.normalize(embeddings_tensor, p=2, dim=1)
+        
+        if torch.cuda.is_available():
+            embeddings_tensor = embeddings_tensor.cuda()
+            self.logger.info("Embeddings loaded to GPU (CUDA) and L2 normalized")
+        else:
+            self.logger.warning("CUDA not available, using CPU")
+            self.logger.info("Embeddings L2 normalized")
+        
+        # Update session data
+        session_data.gallery_embeddings = embeddings_tensor
+        session_data.gallery_labels = labels_list
+        session_data.gallery_student_ids = student_ids_list
+        session_data.embedding_count = len(embeddings_data)
+        
+        self.logger.info(
+            "Embeddings loaded to VRAM",
+            embedding_count=len(embeddings_data),
+            tensor_shape=tuple(embeddings_tensor.shape),
+            device=embeddings_tensor.device,
+            memory_mb=embeddings_tensor.element_size() * embeddings_tensor.nelement() / (1024 * 1024)
+        )
+    
     async def get_session(self, session_id: str) -> Optional[SessionResponse]:
         """
-        Lấy thông tin session
+        Lấy thông tin session (DTO)
         
         Args:
             session_id: ID của session
@@ -92,6 +219,27 @@ class SessionManager(LoggerMixin):
                 session_data.status = "expired"
             
             return self._session_data_to_response(session_data)
+    
+    async def get_session_data(self, session_id: str) -> Optional[SessionData]:
+        """
+        Lấy SessionData thực (với embeddings) - for internal use
+        
+        Args:
+            session_id: ID của session
+            
+        Returns:
+            SessionData object hoặc None nếu không tồn tại
+        """
+        async with self._lock:
+            session_data = self._sessions.get(session_id)
+            if not session_data:
+                return None
+            
+            # Kiểm tra session có hết hạn không
+            if self._is_session_expired(session_data):
+                session_data.status = "expired"
+            
+            return session_data
     
     async def delete_session(self, session_id: str) -> bool:
         """
@@ -137,6 +285,20 @@ class SessionManager(LoggerMixin):
             
             session_data.total_frames_processed += 1
             return True
+    
+    async def get_session_data(self, session_id: str) -> Optional[SessionData]:
+        """
+        Get full session data including embeddings in VRAM.
+        Used by face recognition service.
+        
+        Args:
+            session_id: Session ID
+        
+        Returns:
+            SessionData object or None if not found
+        """
+        async with self._lock:
+            return self._sessions.get(session_id)
     
     async def get_active_sessions_count(self) -> int:
         """Lấy số lượng session đang hoạt động"""

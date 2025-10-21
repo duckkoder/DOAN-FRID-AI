@@ -47,8 +47,8 @@ async def process_frame(
     )
     
     try:
-        # Kiểm tra session tồn tại
-        session = await session_manager.get_session(session_id)
+        # Kiểm tra session tồn tại và lấy SessionData thực (với embeddings)
+        session = await session_manager.get_session_data(session_id)
         if not session:
             request_logger.warning("Session not found")
             raise HTTPException(
@@ -81,10 +81,15 @@ async def process_frame(
         detections = await face_engine.detect_faces(frame_data)
         request_logger.debug("Face detection completed", num_faces=len(detections))
         
-        # Face recognition
-        # TODO: Load embeddings từ session
-        embeddings_db = {}  # Stub empty embeddings
-        detections = await face_engine.recognize_faces(detections, embeddings_db, frame_data)
+        # Face recognition - Use session embeddings from VRAM
+        # session.gallery_embeddings: torch.Tensor shape (N, 512) on GPU
+        # session.gallery_labels: List[str] student codes
+        detections = await face_engine.recognize_faces(
+            detections, 
+            frame_data,
+            gallery_embeddings=session.gallery_embeddings,
+            gallery_labels=session.gallery_labels
+        )
         
         # Face tracking - gán track_id cho mỗi detection
         detections = await face_tracker.update(detections)

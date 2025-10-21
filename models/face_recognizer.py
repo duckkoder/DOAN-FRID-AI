@@ -680,16 +680,54 @@ class FaceRecognizer:
         *,
         threshold: Optional[float] = None,
         tta: bool = False,
+        gallery_embeddings: Optional[Tensor] = None,
+        gallery_labels: Optional[List[str]] = None,
     ) -> Dict[str, Union[str, float, Sequence[Dict[str, float]]]]:
-        if not self._database:
-            raise RuntimeError("Face database is empty. Call build_database() first.")
+        """
+        Identify a face from an image.
+        
+        Args:
+            image: Input image (path, PIL Image, or numpy array)
+            threshold: Recognition threshold (override default)
+            tta: Enable test-time augmentation
+            gallery_embeddings: External gallery embeddings tensor (N, 512) on GPU [OPTIONAL]
+            gallery_labels: External gallery labels list (N,) [OPTIONAL]
+            
+        Returns:
+            Recognition result dictionary
+            
+        Note:
+            If gallery_embeddings and gallery_labels are provided, they will be used
+            instead of the internal database. This is useful for session-based recognition
+            where embeddings are loaded from database and kept in VRAM.
+        """
+        # Use external gallery if provided, otherwise use internal database
+        if gallery_embeddings is not None and gallery_labels is not None:
+            if gallery_embeddings.shape[0] != len(gallery_labels):
+                raise ValueError(f"Mismatch: {gallery_embeddings.shape[0]} embeddings vs {len(gallery_labels)} labels")
+            gallery = gallery_embeddings
+            labels = gallery_labels
+            # For external gallery, use global threshold only (no dynamic thresholds)
+            use_dynamic = False
+        else:
+            if not self._database:
+                raise RuntimeError("Face database is empty. Call build_database() first.")
+            self._ensure_statistics()
+            if not self._gallery_labels or self._gallery_embeddings is None:
+                raise RuntimeError("Face database is empty. Call build_database() first.")
+            gallery = self._gallery_embeddings
+            labels = self._gallery_labels
+            use_dynamic = self.enable_dynamic_threshold
+            
         global_threshold = threshold if threshold is not None else self.threshold
         global_threshold = float(global_threshold)
         query = self.extract_features(image, tta=tta).squeeze(0)
-        self._ensure_statistics()
-        if not self._gallery_labels or self._gallery_embeddings is None:
-            raise RuntimeError("Face database is empty. Call build_database() first.")
-        gallery = self._gallery_embeddings
+        
+        # ⚠️ CRITICAL: Ensure query and gallery are on the same device
+        # If gallery is on GPU but query is on CPU (or vice versa), subtraction will fail
+        if query.device != gallery.device:
+            query = query.to(gallery.device)
+        
         diff = gallery - query.unsqueeze(0)
         distances_all = torch.sum(diff * diff, dim=1)
         k = min(self.knn_k, distances_all.shape[0])
@@ -702,7 +740,7 @@ class FaceRecognizer:
         topk_distance_list = topk_distances.detach().cpu().tolist()
         topk_index_list = topk_indices.detach().cpu().tolist()
         for dist, idx in zip(topk_distance_list, topk_index_list):
-            name = self._gallery_labels[idx]
+            name = labels[idx]  # Use external or internal labels
             weight = 1.0 / (dist + 1e-6)
             vote_scores[name] = vote_scores.get(name, 0.0) + weight
             if name not in nearest_per_identity or dist < nearest_per_identity[name]:
@@ -716,19 +754,20 @@ class FaceRecognizer:
             best_distance = float(nearest_per_identity[best_name])
         else:
             min_index = int(torch.argmin(distances_all).item())
-            best_name = self._gallery_labels[min_index]
+            best_name = labels[min_index]  # Use external or internal labels
             best_distance = float(distances_all[min_index].item())
             neighbors.insert(0, {"person": best_name, "distance": best_distance})
             vote_scores[best_name] = 1.0
             nearest_per_identity[best_name] = best_distance
         centroid_distance = None
-        if best_name in self._centroids:
+        # Only use centroid if internal database is used
+        if use_dynamic and best_name in self._centroids:
             centroid = self._centroids[best_name]
             centroid_distance = float(torch.sum((centroid - query) ** 2).item())
-        identity_threshold = self._identity_thresholds.get(best_name, float(global_threshold))
+        identity_threshold = self._identity_thresholds.get(best_name, float(global_threshold)) if use_dynamic else float(global_threshold)
         if threshold is not None:
             identity_threshold = min(identity_threshold, float(global_threshold))
-        used_threshold = identity_threshold if self.enable_dynamic_threshold else float(global_threshold)
+        used_threshold = identity_threshold if use_dynamic else float(global_threshold)
         distance_for_conf = centroid_distance if centroid_distance is not None else best_distance
         vote_total = sum(vote_scores.values())
         vote_ratio = float(vote_scores.get(best_name, 0.0) / vote_total) if vote_total else 0.0

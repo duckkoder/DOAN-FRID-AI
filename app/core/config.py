@@ -93,6 +93,18 @@ class Settings(BaseSettings):
     REGISTRATION_AUGMENTATIONS: int = 5
     SAVE_REGISTRATION_IMAGES: bool = True
     
+    # PostgreSQL pgvector connection
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "attendance_db"
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "123qwe!%40%23"
+    
+    @property
+    def DATABASE_URL(self) -> str:
+        """Get PostgreSQL connection URL."""
+        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

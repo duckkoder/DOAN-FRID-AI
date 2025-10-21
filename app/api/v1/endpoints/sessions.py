@@ -20,40 +20,63 @@ logger = get_logger(__name__)
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(request: SessionCreateRequest):
     """
-    Tạo session mới
+    Tạo session mới và load embeddings vào VRAM.
+    
+    Flow:
+    1. Backend gửi danh sách student_codes (100 students)
+    2. AI-Service query embeddings từ pgvector (1 query duy nhất)
+    3. Load embeddings vào VRAM (GPU memory)
+    4. Return session info
     
     Args:
-        request: Thông tin tạo session
+        request: SessionCreateRequest với student_codes
         
     Returns:
-        Thông tin session đã tạo
+        Thông tin session đã tạo với embeddings loaded
         
     Raises:
-        HTTPException: Nếu có lỗi khi tạo session
+        HTTPException: Nếu có lỗi khi tạo session hoặc load embeddings
     """
     try:
-        # Kiểm tra S3 object có tồn tại không (stub)
-        exists = await s3_storage.check_object_exists(request.s3)
-        if not exists:
-            logger.warning(
-                "S3 embeddings object not found (STUB - continuing anyway)",
-                bucket=request.s3.bucket,
-                key=request.s3.key
+        # Validate request
+        if not request.student_codes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="student_codes is required and cannot be empty"
             )
         
-        # Tạo session
+        logger.info(
+            "Creating session with embeddings",
+            class_id=request.class_id,
+            student_count=len(request.student_codes)
+        )
+        
+        # Tạo session và load embeddings vào VRAM
         session = await session_manager.create_session(request)
         
+        if not session.embeddings_loaded:
+            logger.error(
+                "Session created but embeddings not loaded",
+                session_id=session.session_id
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to load embeddings into VRAM"
+            )
+        
         logger.info(
-            "Session created successfully",
+            "Session created successfully with embeddings in VRAM",
             session_id=session.session_id,
-            class_id=request.class_id
+            class_id=request.class_id,
+            student_count=len(request.student_codes)
         )
         
         return session
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Failed to create session", error=str(e))
+        logger.error("Failed to create session", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create session: {str(e)}"

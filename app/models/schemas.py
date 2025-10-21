@@ -17,8 +17,9 @@ class S3Config(BaseModel):
 class SessionCreateRequest(BaseModel):
     """Request để tạo session mới"""
     class_id: str = Field(..., description="ID của lớp học")
+    student_codes: List[str] = Field(..., description="Danh sách student codes trong lớp (100 students)")
     backend_callback_url: str = Field(..., description="URL callback để thông báo backend")
-    s3: S3Config = Field(..., description="Cấu hình S3 cho embeddings")
+    s3: S3Config = Field(None, description="Cấu hình S3 cho embeddings (optional, deprecated)")
     max_duration_minutes: Optional[int] = Field(60, description="Thời gian tối đa của session (phút)")
 
 

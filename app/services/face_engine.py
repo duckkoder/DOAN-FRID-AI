@@ -111,27 +111,36 @@ class FaceEngine(LoggerMixin):
     async def recognize_faces(
         self,
         detections: List[Detection],
-        embeddings_db: dict,
-        frame_data: Optional[bytes] = None
+        frame_data: Optional[bytes] = None,
+        gallery_embeddings: Optional[Any] = None,  # torch.Tensor
+        gallery_labels: Optional[List[str]] = None,
     ) -> List[Detection]:
         """
         Nhận diện faces dựa trên embeddings database
         
         Args:
             detections: Danh sách detections từ detect_faces
-            embeddings_db: Database embeddings (dict)
             frame_data: Raw frame data để crop faces
+            gallery_embeddings: Gallery embeddings tensor (N, 512) on GPU [from session]
+            gallery_labels: Gallery labels (student codes) [from session]
             
         Returns:
             Danh sách detections với thông tin recognition
+            
+        Note:
+            If gallery_embeddings and gallery_labels are provided, they will be used
+            for recognition (session-based). Otherwise, recognizer's internal database
+            will be used (legacy mode).
         """
         if self.recognizer is None:
             self.logger.warning("Recognizer not initialized")
             return detections
         
-        if not embeddings_db:
-            self.logger.warning("Embeddings database is empty")
-            return detections
+        # Check if we have session-based embeddings
+        use_session_embeddings = gallery_embeddings is not None and gallery_labels is not None
+        
+        if not use_session_embeddings:
+            self.logger.warning("No session embeddings provided - using internal database (legacy)")
         
         if frame_data is None:
             self.logger.warning("No frame data for face crops")
@@ -153,8 +162,12 @@ class FaceEngine(LoggerMixin):
                     if face_crop.size == 0:
                         continue
                     
-                    # Identify face
-                    identity = await self.recognizer.identify_async(face_crop)
+                    # Identify face - pass session embeddings if available
+                    identity = await self.recognizer.identify_async(
+                        face_crop,
+                        gallery_embeddings=gallery_embeddings,
+                        gallery_labels=gallery_labels
+                    )
                     
                     if identity and identity.get('person') != 'Unknown':
                         detection.student_id = identity.get('person')

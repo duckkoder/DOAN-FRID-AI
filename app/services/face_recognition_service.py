@@ -4,6 +4,7 @@ Face Recognition Service - Wrapper cho FaceRecognizer
 from typing import Dict, Optional, List, Any
 import numpy as np
 from pathlib import Path
+import torch
 
 from models.face_recognizer import FaceRecognizer
 from app.core.config import settings
@@ -80,7 +81,9 @@ class FaceRecognitionService(LoggerMixin):
     def identify(
         self,
         face_crop: np.ndarray,
-        tta: Optional[bool] = None
+        tta: Optional[bool] = None,
+        gallery_embeddings: Optional[Any] = None,  # torch.Tensor
+        gallery_labels: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Nhận diện khuôn mặt
@@ -88,6 +91,8 @@ class FaceRecognitionService(LoggerMixin):
         Args:
             face_crop: Ảnh crop của khuôn mặt (RGB)
             tta: Bật Test Time Augmentation
+            gallery_embeddings: External gallery embeddings tensor (N, 512) on GPU [OPTIONAL]
+            gallery_labels: External gallery labels (student codes) [OPTIONAL]
             
         Returns:
             Dictionary chứa thông tin identification:
@@ -96,11 +101,20 @@ class FaceRecognitionService(LoggerMixin):
             - distance: Khoảng cách embedding
             - vote_ratio: Tỷ lệ vote (nếu dùng KNN)
             - threshold: Ngưỡng được sử dụng
+            
+        Note:
+            If gallery_embeddings and gallery_labels are provided, they will be used
+            instead of the internal database. This enables session-based recognition.
         """
         try:
             tta_enabled = tta if tta is not None else settings.TTA_ENABLED
             
-            identity = self.recognizer.identify(face_crop, tta=tta_enabled)
+            identity = self.recognizer.identify(
+                face_crop, 
+                tta=tta_enabled,
+                gallery_embeddings=gallery_embeddings,
+                gallery_labels=gallery_labels
+            )
             
             if identity:
                 # Áp dụng filters
@@ -132,14 +146,16 @@ class FaceRecognitionService(LoggerMixin):
     async def identify_async(
         self,
         face_crop: np.ndarray,
-        tta: Optional[bool] = None
+        tta: Optional[bool] = None,
+        gallery_embeddings: Optional[torch.Tensor] = None,
+        gallery_labels: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Async wrapper cho identify
         
         TODO: Implement thật sự async nếu cần
         """
-        return self.identify(face_crop, tta)
+        return self.identify(face_crop, tta, gallery_embeddings, gallery_labels)
     
     def extract_features(
         self,

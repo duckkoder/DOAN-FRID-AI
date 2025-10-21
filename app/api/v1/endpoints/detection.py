@@ -28,6 +28,7 @@ class FaceInfo(BaseModel):
 class DetectRequest(BaseModel):
     """Request"""
     image_base64: str = Field(..., description="Ảnh base64")
+    session_id: Optional[str] = Field(None, description="Session ID (optional - để dùng embeddings từ session)")
 
 
 class DetectResponse(BaseModel):
@@ -119,6 +120,24 @@ async def detect_faces(request: DetectRequest):
         
         logger.info(f"Detected {len(detections)} faces")
         
+        # Get session embeddings if session_id provided
+        gallery_embeddings = None
+        gallery_labels = None
+        
+        if request.session_id:
+            try:
+                from app.services.session_manager import session_manager
+                session_data = await session_manager.get_session_data(request.session_id)
+                
+                if session_data:
+                    gallery_embeddings = session_data.gallery_embeddings
+                    gallery_labels = session_data.gallery_labels
+                    logger.info(f"Using session embeddings: {len(gallery_labels)} students")
+                else:
+                    logger.warning(f"Session {request.session_id} not found, using internal database")
+            except Exception as e:
+                logger.warning(f"Failed to load session embeddings: {e}")
+        
         # Recognize faces
         faces = []
         recognized_count = 0
@@ -132,16 +151,24 @@ async def detect_faces(request: DetectRequest):
             )
             
             # Try to recognize if crop available
-            if crop is not None and recognizer.has_database:
-                try:
-                    identity = await recognizer.identify_async(crop)
-                    
-                    if identity and identity.get('person') != 'Unknown':
-                        face_info.person_name = identity.get('person')
-                        face_info.recognition_confidence = float(identity.get('confidence', 0.0))
-                        recognized_count += 1
-                except Exception as e:
-                    logger.warning(f"Recognition failed: {e}")
+            if crop is not None:
+                # Use session embeddings if available, otherwise use internal database
+                can_recognize = (gallery_embeddings is not None and gallery_labels is not None) or recognizer.has_database
+                
+                if can_recognize:
+                    try:
+                        identity = await recognizer.identify_async(
+                            crop,
+                            gallery_embeddings=gallery_embeddings,
+                            gallery_labels=gallery_labels
+                        )
+                        
+                        if identity and identity.get('person') != 'Unknown':
+                            face_info.person_name = identity.get('person')
+                            face_info.recognition_confidence = float(identity.get('confidence', 0.0))
+                            recognized_count += 1
+                    except Exception as e:
+                        logger.warning(f"Recognition failed: {e}")
             
             faces.append(face_info)
         
