@@ -86,14 +86,6 @@ class RecognitionValidator(LoggerMixin):
         
         # Thêm vào recognition history
         track_state.add_recognition(student_id, confidence, timestamp)
-        
-        self.logger.debug(
-            "Recognition added to track",
-            track_id=track_id,
-            student_id=student_id,
-            confidence=confidence,
-            history_size=len(track_state.recognition_history)
-        )
     
     async def validate_recognition(
         self,
@@ -133,40 +125,18 @@ class RecognitionValidator(LoggerMixin):
         
         # 1. Phải có student_id dominant
         if dominant_student_id is None:
-            self.logger.debug(
-                "Validation failed: No dominant student ID",
-                track_id=track_id
-            )
             return None
         
         # 2. Số lần nhận diện phải >= confirmation_threshold
         if dominant_count < self.confirmation_threshold:
-            self.logger.debug(
-                "Validation failed: Insufficient recognitions",
-                track_id=track_id,
-                dominant_count=dominant_count,
-                required=self.confirmation_threshold
-            )
             return None
         
         # 3. Confidence trung bình phải >= min_avg_confidence
         if avg_confidence < self.min_avg_confidence:
-            self.logger.debug(
-                "Validation failed: Low average confidence",
-                track_id=track_id,
-                avg_confidence=avg_confidence,
-                required=self.min_avg_confidence
-            )
             return None
         
         # 4. Success rate phải >= min_success_rate
         if success_rate < self.min_success_rate:
-            self.logger.debug(
-                "Validation failed: Low success rate",
-                track_id=track_id,
-                success_rate=success_rate,
-                required=self.min_success_rate
-            )
             return None
         
         # 5. Kiểm tra debouncing - đã confirm student này trong thời gian gần đây chưa?
@@ -175,13 +145,6 @@ class RecognitionValidator(LoggerMixin):
             time_since_last = (current_time - last_confirmed).total_seconds()
             
             if time_since_last < self.debounce_seconds:
-                self.logger.debug(
-                    "Validation failed: Debounce period",
-                    track_id=track_id,
-                    student_id=dominant_student_id,
-                    time_since_last=time_since_last,
-                    debounce_seconds=self.debounce_seconds
-                )
                 return None
         
         # Tất cả điều kiện đều pass - Validation thành công!
@@ -366,12 +329,6 @@ class RecognitionValidator(LoggerMixin):
         
         for student_id in students_to_remove:
             del self._confirmed_students[student_id]
-        
-        if students_to_remove:
-            self.logger.debug(
-                "Cleaned up old confirmations",
-                count=len(students_to_remove)
-            )
     
     def reset_debounce(self, student_id: Optional[str] = None):
         """

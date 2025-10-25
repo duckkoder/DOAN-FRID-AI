@@ -143,12 +143,26 @@ async def process_frame(
         # **CƠ CHẾ MỚI: Chỉ gửi callback cho sinh viên đã được VALIDATED**
         # Không còn tin ngay vào kết quả nhận diện đầu tiên
         if validated_student_ids:
+            from app.models.schemas import ValidatedStudent
+            
+            # Create ValidatedStudent objects (HTTP endpoint doesn't have tracking, use defaults)
+            validated_students_data = [
+                ValidatedStudent(
+                    student_code=student_id,
+                    student_name=student_id,  # HTTP endpoint doesn't have student names
+                    track_id=0,  # No tracking in HTTP endpoint
+                    avg_confidence=0.0,  # No multi-frame stats
+                    frame_count=1,  # Single frame
+                    recognition_count=1,  # Single recognition
+                    validation_passed_at=request.timestamp
+                )
+                for student_id in validated_student_ids
+            ]
+            
             attendance_data = AttendanceUpdate(
                 session_id=session_id,
-                class_id=session.class_id,
-                timestamp=request.timestamp,
-                recognized_students=list(validated_student_ids),
-                total_faces_detected=len(detections)
+                validated_students=validated_students_data,
+                timestamp=request.timestamp
             )
             
             # Gửi callback async (không chờ kết quả)
@@ -194,24 +208,25 @@ async def _send_callback_async(
 ) -> bool:
     """
     Gửi callback async với error handling
-    
-    TODO: Implement background task hoặc message queue
     """
     try:
-        async with backend_notifier:
-            success = await backend_notifier.send_attendance_update_with_retry(
+        # ✅ Create new notifier instance with context manager
+        from app.services.notifier import BackendNotifier
+        
+        async with BackendNotifier() as notifier:
+            success = await notifier.send_attendance_update_with_retry(
                 callback_url, attendance_data, session_id
             )
             
             if success:
-                request_logger.info("Callback sent successfully")
+                request_logger.info("Callback sent successfully to Backend")
             else:
-                request_logger.error("Callback failed after retries")
+                request_logger.error("Callback failed after all retries")
             
             return success
             
     except Exception as e:
-        request_logger.error("Callback error", error=str(e))
+        request_logger.error("Callback exception", error=str(e), exc_info=True)
         return False
 
 
@@ -419,35 +434,64 @@ async def stream_frames(
                 })
                 
                 # 12. Send student_validated messages (only new ones)
-                for student_id in validated_student_ids:
-                    if student_id not in validated_students_sent:
-                        # Get student details
-                        validator = get_recognition_validator()
-                        student_data = await validator.get_validated_student_data(student_id)
+                newly_validated = [student_id for student_id in validated_student_ids 
+                                   if student_id not in validated_students_sent]
+                
+                if newly_validated:
+                    from app.models.schemas import ValidatedStudent
+                    
+                    validated_students_data = []
+                    
+                    for student_id in newly_validated:
+                        # Find detection with this student_id to get track_id and student_name
+                        detection_with_student = next((d for d in detections if d.student_id == student_id), None)
                         
-                        if student_data:
-                            await websocket.send_json({
-                                "type": "student_validated",
-                                "student": student_data
-                            })
+                        if detection_with_student and detection_with_student.track_id:
+                            # Get track state and stats
+                            track_state = await face_tracker.get_track_info(detection_with_student.track_id)
                             
-                            validated_students_sent.add(student_id)
-                            
-                            # 13. Send callback to Backend
-                            attendance_data = AttendanceUpdate(
-                                session_id=session_id,
-                                class_id=session.class_id,
-                                timestamp=datetime.now(timezone.utc),
-                                recognized_students=[student_id],
-                                total_faces_detected=len(detections)
-                            )
-                            
-                            await _send_callback_async(
-                                session.backend_callback_url,
-                                attendance_data,
-                                session_id,
-                                ws_logger
-                            )
+                            if track_state:
+                                stats = track_state.get_recognition_stats(window_size=5)
+                                
+                                validated_student = ValidatedStudent(
+                                    student_code=student_id,
+                                    student_name=getattr(detection_with_student, 'student_name', student_id),
+                                    track_id=detection_with_student.track_id,
+                                    avg_confidence=stats.get('avg_confidence', 0.0),
+                                    frame_count=stats.get('total_frames', 0),
+                                    recognition_count=stats.get('successful_frames', 0),
+                                    validation_passed_at=datetime.now(timezone.utc)
+                                )
+                                
+                                validated_students_data.append(validated_student)
+                                
+                                # Send student_validated WS message
+                                await websocket.send_json({
+                                    "type": "student_validated",
+                                    "student": {
+                                        "student_code": student_id,
+                                        "student_name": validated_student.student_name,
+                                        "confidence": validated_student.avg_confidence,
+                                        "track_id": validated_student.track_id
+                                    }
+                                })
+                                
+                                validated_students_sent.add(student_id)
+                    
+                    # 13. Send callback to Backend for all newly validated students
+                    if validated_students_data:
+                        attendance_data = AttendanceUpdate(
+                            session_id=session_id,
+                            validated_students=validated_students_data,
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        
+                        await _send_callback_async(
+                            session.backend_callback_url,
+                            attendance_data,
+                            session_id,
+                            ws_logger
+                        )
                 
                 # 14. Increment frame counter
                 await session_manager.increment_frame_count(session_id)

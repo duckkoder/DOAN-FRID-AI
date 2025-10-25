@@ -69,13 +69,22 @@ class FrameResponse(BaseModel):
 
 
 # Callback schemas
+class ValidatedStudent(BaseModel):
+    """Thông tin sinh viên đã được validate (match Backend's AIValidatedStudent)"""
+    student_code: str = Field(..., description="Mã sinh viên")
+    student_name: str = Field(..., description="Tên sinh viên")
+    track_id: int = Field(..., description="Tracking ID")
+    avg_confidence: float = Field(..., description="Độ tin cậy trung bình")
+    frame_count: int = Field(..., description="Số frame đã xử lý")
+    recognition_count: int = Field(..., description="Số lần nhận diện thành công")
+    validation_passed_at: datetime = Field(..., description="Thời điểm pass validation")
+
+
 class AttendanceUpdate(BaseModel):
-    """Thông tin cập nhật điểm danh gửi về backend"""
-    session_id: str = Field(..., description="ID của session")
-    class_id: str = Field(..., description="ID của lớp học")
-    timestamp: datetime = Field(..., description="Thời gian")
-    recognized_students: List[str] = Field(..., description="Danh sách sinh viên được nhận diện")
-    total_faces_detected: int = Field(..., description="Tổng số khuôn mặt detected")
+    """Thông tin cập nhật điểm danh gửi về backend (match Backend's AICallbackPayload)"""
+    session_id: str = Field(..., description="AI session ID")
+    validated_students: List[ValidatedStudent] = Field(..., description="Danh sách sinh viên đã validate")
+    timestamp: datetime = Field(..., description="Thời gian callback")
 
 
 # Health check schema

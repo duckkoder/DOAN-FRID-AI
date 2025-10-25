@@ -72,13 +72,22 @@ class BackendNotifier(LoggerMixin):
         try:
             logger.info("Sending attendance update to backend", callback_url=callback_url)
             
-            # Prepare payload
+            # Prepare payload matching Backend's AICallbackPayload
             payload = {
                 "session_id": attendance_data.session_id,
-                "class_id": attendance_data.class_id,
-                "recognized_students": attendance_data.recognized_students,
-                "timestamp": attendance_data.timestamp.isoformat() if isinstance(attendance_data.timestamp, datetime) else attendance_data.timestamp,
-                "total_faces_detected": attendance_data.total_faces_detected
+                "validated_students": [
+                    {
+                        "student_code": student.student_code,
+                        "student_name": student.student_name,
+                        "track_id": student.track_id,
+                        "avg_confidence": student.avg_confidence,
+                        "frame_count": student.frame_count,
+                        "recognition_count": student.recognition_count,
+                        "validation_passed_at": student.validation_passed_at.isoformat() if isinstance(student.validation_passed_at, datetime) else student.validation_passed_at
+                    }
+                    for student in attendance_data.validated_students
+                ],
+                "timestamp": attendance_data.timestamp.isoformat() if isinstance(attendance_data.timestamp, datetime) else attendance_data.timestamp
             }
             
             # Generate HMAC-SHA256 signature
