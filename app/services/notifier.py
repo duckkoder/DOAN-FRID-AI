@@ -1,7 +1,10 @@
 """
-Notifier Service - Gửi callback về backend
+Notifier Service - Gửi callback về backend với HMAC signature
 """
 import asyncio
+import hmac
+import hashlib
+import json
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 
@@ -74,14 +77,28 @@ class BackendNotifier(LoggerMixin):
                 "session_id": attendance_data.session_id,
                 "class_id": attendance_data.class_id,
                 "recognized_students": attendance_data.recognized_students,
-                "timestamp": attendance_data.timestamp,
+                "timestamp": attendance_data.timestamp.isoformat() if isinstance(attendance_data.timestamp, datetime) else attendance_data.timestamp,
                 "total_faces_detected": attendance_data.total_faces_detected
             }
             
-            # Send POST request to backend webhook
+            # Generate HMAC-SHA256 signature
+            payload_str = json.dumps(payload, separators=(',', ':'))  # No spaces
+            signature = hmac.new(
+                settings.BACKEND_CALLBACK_SECRET.encode(),
+                payload_str.encode(),
+                hashlib.sha256
+            ).hexdigest()
+            
+            logger.debug("Generated HMAC signature", signature_preview=signature[:16])
+            
+            # Send POST request to backend webhook với signature header
             response = await self.client.post(
                 callback_url,
                 json=payload,
+                headers={
+                    "X-AI-Signature": signature,
+                    "Content-Type": "application/json"
+                },
                 timeout=10.0
             )
             

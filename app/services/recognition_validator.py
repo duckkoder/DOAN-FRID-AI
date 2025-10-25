@@ -25,7 +25,7 @@ class RecognitionValidator(LoggerMixin):
         self,
         confirmation_threshold: int = 3,  # Số lần nhận diện tối thiểu
         window_size: int = 5,  # Số frame xem xét
-        min_avg_confidence: float = 0.6,  # Confidence trung bình tối thiểu
+        min_avg_confidence: float = 0.5,  # Confidence trung bình tối thiểu (LOWERED for KNN vote scaling)
         min_success_rate: float = 0.6,  # Tỷ lệ thành công tối thiểu (3/5 = 0.6)
         debounce_seconds: int = 30  # Thời gian debounce (giây)
     ):
@@ -272,14 +272,39 @@ class RecognitionValidator(LoggerMixin):
         # Lấy tất cả active tracks
         active_tracks_count = await face_tracker.get_active_tracks_count()
         
+        self.logger.info(
+            f"Checking validation for {active_tracks_count} active tracks",
+            active_tracks=active_tracks_count
+        )
+        
         if active_tracks_count == 0:
             return validated_students
         
         # Duyệt qua tất cả tracks và validate
         # (Cần access internal tracks - có thể cần thêm API)
         for track_id, track_state in face_tracker._tracks.items():
+            # Log track state
+            stats = track_state.get_recognition_stats(self.window_size)
+            self.logger.info(
+                f"[Track {track_id}] Stats: history_size={len(track_state.recognition_history)}, "
+                f"dominant_student={stats['dominant_student_id']}, "
+                f"dominant_count={stats['dominant_count']}, "
+                f"avg_conf={stats['avg_confidence']:.3f}, "
+                f"success_rate={stats['success_rate']:.3f}, "
+                f"already_confirmed={track_state.confirmed_student_id}"
+            )
+            
             # Bỏ qua nếu đã confirmed
             if track_state.confirmed_student_id is not None:
+                # Already validated - return it only if not yet added to _confirmed_students (first validation)
+                # This ensures we return the student_id on the FIRST frame they were validated
+                if track_state.confirmed_student_id not in self._confirmed_students:
+                    self.logger.info(
+                        f"Found newly confirmed student from track state: {track_state.confirmed_student_id}"
+                    )
+                    validated_students.add(track_state.confirmed_student_id)
+                    # Add to _confirmed_students to prevent returning again
+                    self._confirmed_students[track_state.confirmed_student_id] = current_time
                 continue
             
             # Thử validate
@@ -289,6 +314,40 @@ class RecognitionValidator(LoggerMixin):
                 validated_students.add(validation_result["student_id"])
         
         return validated_students
+    
+    async def get_validated_student_data(self, student_id: str) -> Optional[Dict]:
+        """
+        Lấy thông tin chi tiết của sinh viên đã được validated
+        
+        Args:
+            student_id: ID sinh viên
+            
+        Returns:
+            Dictionary với thông tin sinh viên hoặc None
+        """
+        # Tìm track có confirmed_student_id matching
+        for track_id, track_state in face_tracker._tracks.items():
+            if track_state.confirmed_student_id == student_id:
+                stats = track_state.get_recognition_stats(self.window_size)
+                return {
+                    "student_id": student_id,
+                    "student_name": student_id,  # TODO: Lookup from database if needed
+                    "confidence": stats["avg_confidence"],
+                    "track_id": track_id,
+                    "confirmed_at": track_state.confirmed_at.isoformat() if track_state.confirmed_at else None
+                }
+        
+        # Fallback: return basic info if not found in tracks
+        if student_id in self._confirmed_students:
+            return {
+                "student_id": student_id,
+                "student_name": student_id,
+                "confidence": 0.0,
+                "track_id": None,
+                "confirmed_at": self._confirmed_students[student_id].isoformat()
+            }
+        
+        return None
     
     def cleanup_old_confirmations(self, current_time: datetime):
         """

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     
+    # Backend Integration
+    BACKEND_JWT_SECRET: str = "your-secret-key-here-change-in-production"  # Must match Backend SECRET_KEY
+    BACKEND_CALLBACK_SECRET: str = "shared-secret-key-for-hmac-verification"  # Must match Backend AI_SERVICE_SECRET
+    
     # JWT settings
     JWT_ALGORITHM: str = "HS256"
     JWT_SECRET: Optional[str] = None

@@ -148,20 +148,29 @@ class FaceTracker(LoggerMixin):
         
         detection_center = self._get_bbox_center(detection.bbox)
         
+        self.logger.info(f"Finding track for detection at {detection_center}, existing tracks: {len(self._tracks)}")
+        
         for track_id, track_state in self._tracks.items():
             track_center = self._get_bbox_center(track_state.last_bbox)
             distance = self._calculate_distance(detection_center, track_center)
             
-            if distance < min_distance and distance < 100:  # Threshold
+            self.logger.info(  # ✅ Changed from debug to info
+                f"Checking track {track_id}: distance={distance:.1f}px, "
+                f"detection_center={detection_center}, track_center={track_center}"
+            )
+            
+            if distance < min_distance and distance < 200:  # ✅ Tăng threshold lên 200px
                 min_distance = distance
                 best_track_id = track_id
         
         if best_track_id is not None:
+            self.logger.info(f"Matched detection to existing track {best_track_id} (distance={min_distance:.1f}px)")
             return best_track_id
         else:
             # Tạo track mới
             new_track_id = self._next_track_id
             self._next_track_id += 1
+            self.logger.info(f"Created new track {new_track_id} (no match found, {len(self._tracks)} existing tracks)")
             return new_track_id
     
     def _update_track_state(self, detection: Detection, current_time: datetime):

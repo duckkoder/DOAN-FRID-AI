@@ -18,11 +18,13 @@ from app.services.database_service import get_database_service
 class SessionData:
     """Dữ liệu session lưu trong memory với embeddings loaded vào VRAM"""
     session_id: str
+    backend_session_id: int  # Backend session ID để mapping
     class_id: str
     backend_callback_url: str
     s3_config: S3Config
     status: str
     created_at: datetime
+    allowed_users: List[str] = field(default_factory=list)  # RBAC: user_ids được phép
     embeddings_loaded: bool = False
     total_frames_processed: int = 0
     max_duration_minutes: int = 60
@@ -61,11 +63,13 @@ class SessionManager(LoggerMixin):
         async with self._lock:
             session_data = SessionData(
                 session_id=session_id,
+                backend_session_id=request.backend_session_id,
                 class_id=request.class_id,
                 backend_callback_url=request.backend_callback_url,
                 s3_config=request.s3 or S3Config(bucket="", key=""),
                 status="active",
                 created_at=datetime.now(timezone.utc),
+                allowed_users=request.allowed_users,
                 max_duration_minutes=request.max_duration_minutes or 60,
                 student_codes=request.student_codes
             )

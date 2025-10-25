@@ -16,10 +16,13 @@ class S3Config(BaseModel):
 
 class SessionCreateRequest(BaseModel):
     """Request để tạo session mới"""
+    backend_session_id: int = Field(..., description="Backend session ID để mapping")
     class_id: str = Field(..., description="ID của lớp học")
     student_codes: List[str] = Field(..., description="Danh sách student codes trong lớp (100 students)")
     backend_callback_url: str = Field(..., description="URL callback để thông báo backend")
-    s3: S3Config = Field(None, description="Cấu hình S3 cho embeddings (optional, deprecated)")
+    ws_token: str = Field(..., description="JWT token mẫu để verify (optional, for reference)")
+    allowed_users: List[str] = Field(default_factory=list, description="Danh sách user_ids được phép (RBAC)")
+    s3: Optional[S3Config] = Field(None, description="Cấu hình S3 cho embeddings (optional, deprecated)")
     max_duration_minutes: Optional[int] = Field(60, description="Thời gian tối đa của session (phút)")
 
 
@@ -49,6 +52,7 @@ class Detection(BaseModel):
     confidence: float = Field(..., description="Confidence score của detection")
     track_id: Optional[int] = Field(None, description="ID tracking của khuôn mặt")
     student_id: Optional[str] = Field(None, description="ID sinh viên nếu được nhận diện")
+    student_name: Optional[str] = Field(None, description="Tên sinh viên nếu được nhận diện")  # ✅ THÊM FIELD
     recognition_confidence: Optional[float] = Field(None, description="Confidence của recognition")
 
 
