@@ -7,13 +7,6 @@ from pydantic import BaseModel, Field
 
 
 # Session related schemas
-class S3Config(BaseModel):
-    """Cấu hình S3 cho embeddings"""
-    bucket: str = Field(..., description="S3 bucket name")
-    key: str = Field(..., description="S3 object key")
-    region: Optional[str] = Field(None, description="S3 region")
-
-
 class SessionCreateRequest(BaseModel):
     """Request để tạo session mới"""
     backend_session_id: int = Field(..., description="Backend session ID để mapping")
@@ -22,7 +15,6 @@ class SessionCreateRequest(BaseModel):
     backend_callback_url: str = Field(..., description="URL callback để thông báo backend")
     ws_token: str = Field(..., description="JWT token mẫu để verify (optional, for reference)")
     allowed_users: List[str] = Field(default_factory=list, description="Danh sách user_ids được phép (RBAC)")
-    s3: Optional[S3Config] = Field(None, description="Cấu hình S3 cho embeddings (optional, deprecated)")
     max_duration_minutes: Optional[int] = Field(60, description="Thời gian tối đa của session (phút)")
 
 
@@ -33,7 +25,6 @@ class SessionResponse(BaseModel):
     status: str = Field(..., description="Trạng thái session: active, ended")
     created_at: datetime = Field(..., description="Thời gian tạo session")
     backend_callback_url: str = Field(..., description="URL callback")
-    s3_config: S3Config = Field(..., description="Cấu hình S3")
     embeddings_loaded: bool = Field(..., description="Trạng thái load embeddings")
     total_frames_processed: int = Field(0, description="Tổng số frame đã xử lý")
 
