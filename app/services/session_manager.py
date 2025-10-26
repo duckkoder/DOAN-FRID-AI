@@ -35,6 +35,10 @@ class SessionData:
     gallery_student_ids: Optional[List[int]] = None  # List of student_ids
     student_codes: List[str] = field(default_factory=list)  # Original list
     embedding_count: int = 0  # Total embeddings loaded
+    
+    # Per-session Tracker and Validator instances
+    face_tracker: Optional[Any] = None  # FaceTracker instance
+    recognition_validator: Optional[Any] = None  # RecognitionValidator instance
 
 
 class SessionManager(LoggerMixin):
@@ -84,6 +88,9 @@ class SessionManager(LoggerMixin):
                 await self._load_embeddings_to_vram(session_data, embeddings_data)
                 
                 session_data.embeddings_loaded = True
+                
+                # BƯỚC 3: ✅ Tạo per-session Tracker và Validator
+                await self._initialize_session_tracker_and_validator(session_data)
                 
                 self.logger.info(
                     "Session created with embeddings loaded to VRAM",
@@ -202,6 +209,64 @@ class SessionManager(LoggerMixin):
             device=embeddings_tensor.device,
             memory_mb=embeddings_tensor.element_size() * embeddings_tensor.nelement() / (1024 * 1024)
         )
+    
+    async def _initialize_session_tracker_and_validator(
+        self,
+        session_data: SessionData
+    ) -> None:
+        """
+        BƯỚC 3: Khởi tạo per-session Tracker và Validator
+        
+        Mỗi session có:
+        - FaceTracker riêng (không chia sẻ tracks giữa sessions)
+        - RecognitionValidator riêng (không chia sẻ history/debounce)
+        
+        Args:
+            session_data: Session data to initialize
+        """
+        from app.services.tracker import create_face_tracker
+        from app.services.recognition_validator import create_recognition_validator
+        from app.core.config import settings
+        
+        try:
+            # Tạo FaceTracker per-session với IoU enabled
+            face_tracker = create_face_tracker(
+                max_disappeared=30,
+                distance_threshold=200,
+                iou_threshold=0.3,
+                use_iou=True  # ✅ Sử dụng IoU thay vì distance
+            )
+            
+            # Tạo RecognitionValidator per-session với auto-adjust FPS
+            recognition_validator = create_recognition_validator(
+                face_tracker=face_tracker,
+                confirmation_threshold=getattr(settings, 'RECOGNITION_CONFIRMATION_THRESHOLD', 3),
+                window_size=getattr(settings, 'RECOGNITION_WINDOW_SIZE', 5),
+                min_avg_confidence=getattr(settings, 'RECOGNITION_MIN_AVG_CONFIDENCE', 0.5),
+                min_success_rate=getattr(settings, 'RECOGNITION_MIN_SUCCESS_RATE', 0.6),
+                debounce_seconds=getattr(settings, 'RECOGNITION_DEBOUNCE_SECONDS', 30),
+                auto_adjust_to_fps=True,  # ✅ Tự động điều chỉnh theo FPS
+                target_fps=5.0
+            )
+            
+            # Lưu vào session data
+            session_data.face_tracker = face_tracker
+            session_data.recognition_validator = recognition_validator
+            
+            self.logger.info(
+                "Per-session Tracker and Validator initialized",
+                session_id=session_data.session_id,
+                use_iou=True,
+                auto_adjust_fps=True
+            )
+            
+        except Exception as e:
+            self.logger.error(
+                "Failed to initialize tracker and validator",
+                session_id=session_data.session_id,
+                error=str(e)
+            )
+            # Don't raise - session can work without tracking
     
     async def get_session(self, session_id: str) -> Optional[SessionResponse]:
         """

@@ -11,9 +11,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, WebSocket, WebSoc
 from app.models.schemas import FrameRequest, FrameResponse, AttendanceUpdate
 from app.services.session_manager import session_manager
 from app.services.face_engine import get_face_engine
-from app.services.tracker import face_tracker
 from app.services.notifier import backend_notifier
-from app.services.recognition_validator import get_recognition_validator
 from app.core.security import get_current_user
 from app.core.logging import get_logger
 
@@ -109,15 +107,34 @@ async def process_frame(
             gallery_labels=session.gallery_labels
         )
         
-        # Face tracking - gán track_id cho mỗi detection
-        detections = await face_tracker.update(detections)
+        # ✅ Face tracking - Sử dụng per-session tracker
+        if session.face_tracker:
+            detections = await session.face_tracker.update(detections)
+        else:
+            request_logger.warning("No face_tracker in session, skipping tracking")
         
-        # **CƠ CHẾ MỚI: Cập nhật recognition history vào validator**
-        await face_engine.update_recognition_history(detections, current_time)
+        # ✅ **CƠ CHẾ MỚI: Cập nhật recognition history vào per-session validator**
+        if session.recognition_validator:
+            for detection in detections:
+                if detection.track_id and detection.student_id:
+                    await session.recognition_validator.add_recognition(
+                        track_id=detection.track_id,
+                        student_code=detection.student_id,  # Using student_code
+                        confidence=detection.recognition_confidence or detection.confidence,
+                        timestamp=current_time
+                    )
         
-        # **CƠ CHẾ MỚI: Chỉ lấy sinh viên đã được VALIDATED**
-        # (pass đủ điều kiện: confirmation threshold, avg confidence, success rate)
-        validated_student_ids: Set[str] = await face_engine.get_validated_students(current_time)
+        # ✅ **CƠ CHẾ MỚI: Chỉ lấy sinh viên đã được VALIDATED**
+        validated_student_ids: Set[str] = set()
+        if session.recognition_validator:
+            for detection in detections:
+                if detection.track_id:
+                    validation_result = await session.recognition_validator.validate_recognition(
+                        track_id=detection.track_id,
+                        current_time=current_time
+                    )
+                    if validation_result:
+                        validated_student_ids.add(validation_result["student_code"])  # Changed from student_id
         
         # Tăng frame counter
         await session_manager.increment_frame_count(session_id)
@@ -405,15 +422,36 @@ async def stream_frames(
                 if recognized_count > 0:
                     ws_logger.info(f"[Frame {frame_count}] Recognized students: {[(d.student_id, d.student_name, d.confidence) for d in detections if d.student_id]}")
                 
-                # 8. Track faces
-                detections = await face_tracker.update(detections)
-                ws_logger.info(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in detections]}")
+                # 8. ✅ Track faces - Sử dụng per-session tracker
+                if session.face_tracker:
+                    detections = await session.face_tracker.update(detections)
+                    ws_logger.info(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in detections]}")
+                else:
+                    ws_logger.warning("No face_tracker in session")
                 
-                # 9. Update recognition history
-                await engine.update_recognition_history(detections, datetime.now(timezone.utc))
+                # 9. ✅ Update recognition history vào per-session validator
+                current_timestamp = datetime.now(timezone.utc)
+                if session.recognition_validator:
+                    for detection in detections:
+                        if detection.track_id and detection.student_id:
+                            await session.recognition_validator.add_recognition(
+                                track_id=detection.track_id,
+                                student_code=detection.student_id,  # Using student_code
+                                confidence=detection.recognition_confidence if hasattr(detection, 'recognition_confidence') else detection.confidence,
+                                timestamp=current_timestamp
+                            )
                 
-                # 10. Get validated students
-                validated_student_ids = await engine.get_validated_students(datetime.now(timezone.utc))
+                # 10. ✅ Get validated students từ per-session validator
+                validated_student_ids = set()
+                if session.recognition_validator:
+                    for detection in detections:
+                        if detection.track_id:
+                            validation_result = await session.recognition_validator.validate_recognition(
+                                track_id=detection.track_id,
+                                current_time=current_timestamp
+                            )
+                            if validation_result:
+                                validated_student_ids.add(validation_result["student_code"])  # Changed from student_id
                 
                 # 11. Send frame_processed message
                 await websocket.send_json({
@@ -446,9 +484,9 @@ async def stream_frames(
                         # Find detection with this student_id to get track_id and student_name
                         detection_with_student = next((d for d in detections if d.student_id == student_id), None)
                         
-                        if detection_with_student and detection_with_student.track_id:
-                            # Get track state and stats
-                            track_state = await face_tracker.get_track_info(detection_with_student.track_id)
+                        if detection_with_student and detection_with_student.track_id and session.face_tracker:
+                            # ✅ Get track state and stats từ per-session tracker
+                            track_state = await session.face_tracker.get_track_info(detection_with_student.track_id)
                             
                             if track_state:
                                 stats = track_state.get_recognition_stats(window_size=5)

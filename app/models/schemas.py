@@ -51,9 +51,15 @@ class Detection(BaseModel):
     bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
     confidence: float = Field(..., description="Confidence score của detection")
     track_id: Optional[int] = Field(None, description="ID tracking của khuôn mặt")
-    student_id: Optional[str] = Field(None, description="ID sinh viên nếu được nhận diện")
-    student_name: Optional[str] = Field(None, description="Tên sinh viên nếu được nhận diện")  # ✅ THÊM FIELD
+    student_code: Optional[str] = Field(None, description="Mã sinh viên nếu được nhận diện (student_code)")
+    student_name: Optional[str] = Field(None, description="Tên sinh viên nếu được nhận diện")
     recognition_confidence: Optional[float] = Field(None, description="Confidence của recognition")
+    
+    # ✅ Backward compatibility alias - for gradual migration
+    @property
+    def student_id(self) -> Optional[str]:
+        """Alias for student_code (backward compatibility)"""
+        return self.student_code
 
 
 class FrameResponse(BaseModel):

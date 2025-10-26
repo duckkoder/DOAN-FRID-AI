@@ -167,7 +167,7 @@ class FaceEngine(LoggerMixin):
                     )
                     
                     if identity and identity.get('person') != 'Unknown':
-                        detection.student_id = identity.get('person')
+                        detection.student_code = identity.get('person')  # ✅ Use student_code
                         detection.student_name = identity.get('person')  # ✅ THÊM student_name
                         detection.recognition_confidence = float(identity.get('confidence', 0.0))
                     
