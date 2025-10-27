@@ -16,10 +16,13 @@ class S3Config(BaseModel):
 
 class SessionCreateRequest(BaseModel):
     """Request để tạo session mới"""
+    backend_session_id: int = Field(..., description="Backend session ID để mapping")
     class_id: str = Field(..., description="ID của lớp học")
     student_codes: List[str] = Field(..., description="Danh sách student codes trong lớp (100 students)")
     backend_callback_url: str = Field(..., description="URL callback để thông báo backend")
-    s3: S3Config = Field(None, description="Cấu hình S3 cho embeddings (optional, deprecated)")
+    ws_token: str = Field(..., description="JWT token mẫu để verify (optional, for reference)")
+    allowed_users: List[str] = Field(default_factory=list, description="Danh sách user_ids được phép (RBAC)")
+    s3: Optional[S3Config] = Field(None, description="Cấu hình S3 cho embeddings (optional, deprecated)")
     max_duration_minutes: Optional[int] = Field(60, description="Thời gian tối đa của session (phút)")
 
 
@@ -48,8 +51,15 @@ class Detection(BaseModel):
     bbox: List[float] = Field(..., description="Bounding box [x1, y1, x2, y2]")
     confidence: float = Field(..., description="Confidence score của detection")
     track_id: Optional[int] = Field(None, description="ID tracking của khuôn mặt")
-    student_id: Optional[str] = Field(None, description="ID sinh viên nếu được nhận diện")
+    student_code: Optional[str] = Field(None, description="Mã sinh viên nếu được nhận diện (student_code)")
+    student_name: Optional[str] = Field(None, description="Tên sinh viên nếu được nhận diện")
     recognition_confidence: Optional[float] = Field(None, description="Confidence của recognition")
+    
+    # ✅ Backward compatibility alias - for gradual migration
+    @property
+    def student_id(self) -> Optional[str]:
+        """Alias for student_code (backward compatibility)"""
+        return self.student_code
 
 
 class FrameResponse(BaseModel):
@@ -65,13 +75,22 @@ class FrameResponse(BaseModel):
 
 
 # Callback schemas
+class ValidatedStudent(BaseModel):
+    """Thông tin sinh viên đã được validate (match Backend's AIValidatedStudent)"""
+    student_code: str = Field(..., description="Mã sinh viên")
+    student_name: str = Field(..., description="Tên sinh viên")
+    track_id: int = Field(..., description="Tracking ID")
+    avg_confidence: float = Field(..., description="Độ tin cậy trung bình")
+    frame_count: int = Field(..., description="Số frame đã xử lý")
+    recognition_count: int = Field(..., description="Số lần nhận diện thành công")
+    validation_passed_at: datetime = Field(..., description="Thời điểm pass validation")
+
+
 class AttendanceUpdate(BaseModel):
-    """Thông tin cập nhật điểm danh gửi về backend"""
-    session_id: str = Field(..., description="ID của session")
-    class_id: str = Field(..., description="ID của lớp học")
-    timestamp: datetime = Field(..., description="Thời gian")
-    recognized_students: List[str] = Field(..., description="Danh sách sinh viên được nhận diện")
-    total_faces_detected: int = Field(..., description="Tổng số khuôn mặt detected")
+    """Thông tin cập nhật điểm danh gửi về backend (match Backend's AICallbackPayload)"""
+    session_id: str = Field(..., description="AI session ID")
+    validated_students: List[ValidatedStudent] = Field(..., description="Danh sách sinh viên đã validate")
+    timestamp: datetime = Field(..., description="Thời gian callback")
 
 
 # Health check schema

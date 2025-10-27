@@ -64,12 +64,14 @@ async def lifespan(app: FastAPI):
         
         # Initialize face engine
         if detector_service or recognizer_service:
+            # Initialize face engine WITHOUT validator (validator is now per-session)
             initialize_face_engine(
                 detector_service=detector_service,
                 recognizer_service=recognizer_service,
-                embedding_manager=embedding_manager
+                embedding_manager=embedding_manager,
+                recognition_validator=None  # Validator is now per-session
             )
-            logger.info("Face engine initialized")
+            logger.info("Face engine initialized (validator will be per-session)")
         else:
             logger.warning("No face services initialized - running in API-only mode")
         

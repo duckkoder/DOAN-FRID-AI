@@ -53,25 +53,25 @@ class FaceEngine(LoggerMixin):
             has_validator=self.validator is not None
         )
     
-    async def detect_faces(self, frame_data: Optional[bytes] = None) -> List[Detection]:
+    async def detect_faces(self, frame_data: Optional[bytes] = None) -> tuple[List[Detection], List[np.ndarray], np.ndarray]:
         """
-        Detect faces trong frame
+        Detect faces trong frame - TRẢ VỀ CROPS giống endpoint /detect
         
         Args:
             frame_data: Raw frame data (bytes hoặc base64)
             
         Returns:
-            Danh sách detections
+            Tuple of (detections, crops, original_image)
         """
         if self.detector is None:
             self.logger.warning("Detector not initialized - returning empty list")
-            return []
+            return [], [], None
         
         try:
             # Convert frame_data to numpy array
             if frame_data is None:
                 # Return empty if no data
-                return []
+                return [], [], None
             
             # Decode image from bytes
             image_array = np.frombuffer(frame_data, dtype=np.uint8)
@@ -79,16 +79,22 @@ class FaceEngine(LoggerMixin):
             
             if image_bgr is None:
                 self.logger.warning("Failed to decode image")
-                return []
+                return [], [], None
             
             # Convert BGR to RGB
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
             
-            # Detect faces
-            detections, _, _ = await self.detector.detect_faces_async(
+            # Detect faces - ✅ RETURN CROPS GIỐNG /detect ENDPOINT
+            detections, crops, _ = await self.detector.detect_faces_async(
                 image_rgb,
-                return_crops=False
+                return_crops=True
             )
+            
+            # Handle None results
+            if detections is None:
+                detections = []
+            if crops is None:
+                crops = []
             
             # Convert to API Detection schema
             api_detections = []
@@ -96,31 +102,30 @@ class FaceEngine(LoggerMixin):
                 api_det = Detection(
                     bbox=[float(x) for x in det.bbox],
                     confidence=float(det.confidence),
-                    track_id=self._next_track_id
+                    track_id=None  # ✅ Let tracker assign track_id
                 )
-                self._next_track_id += 1
                 api_detections.append(api_det)
             
             self.logger.debug(f"Detected {len(api_detections)} faces")
-            return api_detections
+            return api_detections, crops, image_rgb
             
         except Exception as e:
             self.logger.error("Face detection failed", error=str(e))
-            return []
+            return [], [], None
     
     async def recognize_faces(
         self,
         detections: List[Detection],
-        frame_data: Optional[bytes] = None,
+        crops: List[np.ndarray],  # ✅ THÊM CROPS PARAMETER
         gallery_embeddings: Optional[Any] = None,  # torch.Tensor
         gallery_labels: Optional[List[str]] = None,
     ) -> List[Detection]:
         """
-        Nhận diện faces dựa trên embeddings database
+        Nhận diện faces dựa trên embeddings database - GIỐNG ENDPOINT /detect
         
         Args:
             detections: Danh sách detections từ detect_faces
-            frame_data: Raw frame data để crop faces
+            crops: Danh sách face crops từ detect_faces ✅
             gallery_embeddings: Gallery embeddings tensor (N, 512) on GPU [from session]
             gallery_labels: Gallery labels (student codes) [from session]
             
@@ -142,35 +147,28 @@ class FaceEngine(LoggerMixin):
         if not use_session_embeddings:
             self.logger.warning("No session embeddings provided - using internal database (legacy)")
         
-        if frame_data is None:
-            self.logger.warning("No frame data for face crops")
+        # Check if we have crops
+        if not crops or len(crops) != len(detections):
+            self.logger.warning(f"Crops mismatch: {len(crops)} crops vs {len(detections)} detections")
             return detections
         
         try:
-            # Decode image
-            image_array = np.frombuffer(frame_data, dtype=np.uint8)
-            image_bgr = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
-            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-            
-            # Crop and recognize each face
-            for detection in detections:
+            # ✅ RECOGNIZE GIỐNG ENDPOINT /detect - SỬ DỤNG CROPS SẴN CÓ
+            for detection, crop in zip(detections, crops):
                 try:
-                    # Crop face from bbox
-                    x1, y1, x2, y2 = [int(x) for x in detection.bbox]
-                    face_crop = image_rgb[y1:y2, x1:x2]
-                    
-                    if face_crop.size == 0:
+                    if crop is None or crop.size == 0:
                         continue
                     
                     # Identify face - pass session embeddings if available
                     identity = await self.recognizer.identify_async(
-                        face_crop,
+                        crop,  # ✅ SỬ DỤNG CROP SẴN CÓ - KHÔNG DECODE/CROP LẠI
                         gallery_embeddings=gallery_embeddings,
                         gallery_labels=gallery_labels
                     )
                     
                     if identity and identity.get('person') != 'Unknown':
-                        detection.student_id = identity.get('person')
+                        detection.student_code = identity.get('person')  # ✅ Use student_code
+                        detection.student_name = identity.get('person')  # ✅ THÊM student_name
                         detection.recognition_confidence = float(identity.get('confidence', 0.0))
                     
                 except Exception as e:
@@ -297,8 +295,10 @@ class FaceEngine(LoggerMixin):
             timestamp: Thời điểm nhận diện
         """
         if self.validator is None:
+            self.logger.warning("Validator is None - skipping recognition history update")
             return
         
+        updated_count = 0
         for detection in detections:
             if detection.track_id is not None:
                 await self.validator.add_recognition(
@@ -307,6 +307,15 @@ class FaceEngine(LoggerMixin):
                     confidence=detection.recognition_confidence or 0.0,
                     timestamp=timestamp
                 )
+                updated_count += 1
+                self.logger.debug(
+                    f"Added recognition: track_id={detection.track_id}, "
+                    f"student_id={detection.student_id}, "
+                    f"confidence={detection.recognition_confidence or 0.0:.3f}"
+                )
+        
+        if updated_count > 0:
+            self.logger.info(f"Updated {updated_count} recognition records in validator")
     
     async def get_validated_students(
         self,
@@ -330,6 +339,9 @@ class FaceEngine(LoggerMixin):
         
         # Lấy các sinh viên mới được validated
         validated_students = await self.validator.get_newly_confirmed_students(current_time)
+        
+        if validated_students:
+            self.logger.info(f"✅ Validated students: {list(validated_students)}")
         
         return validated_students
 
