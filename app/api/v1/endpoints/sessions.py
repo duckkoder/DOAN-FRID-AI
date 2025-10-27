@@ -10,7 +10,6 @@ from app.models.schemas import (
     ErrorResponse
 )
 from app.services.session_manager import session_manager
-from app.services.storage import s3_storage
 from app.core.logging import get_logger
 
 router = APIRouter()

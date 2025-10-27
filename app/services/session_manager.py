@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import torch
 import numpy as np
 
-from app.models.schemas import SessionCreateRequest, SessionResponse, S3Config
+from app.models.schemas import SessionCreateRequest, SessionResponse
 from app.core.logging import LoggerMixin
 from app.services.database_service import get_database_service
 
@@ -21,7 +21,6 @@ class SessionData:
     backend_session_id: int  # Backend session ID để mapping
     class_id: str
     backend_callback_url: str
-    s3_config: S3Config
     status: str
     created_at: datetime
     allowed_users: List[str] = field(default_factory=list)  # RBAC: user_ids được phép
@@ -70,7 +69,6 @@ class SessionManager(LoggerMixin):
                 backend_session_id=request.backend_session_id,
                 class_id=request.class_id,
                 backend_callback_url=request.backend_callback_url,
-                s3_config=request.s3 or S3Config(bucket="", key=""),
                 status="active",
                 created_at=datetime.now(timezone.utc),
                 allowed_users=request.allowed_users,
@@ -406,7 +404,6 @@ class SessionManager(LoggerMixin):
             status=session_data.status,
             created_at=session_data.created_at,
             backend_callback_url=session_data.backend_callback_url,
-            s3_config=session_data.s3_config,
             embeddings_loaded=session_data.embeddings_loaded,
             total_frames_processed=session_data.total_frames_processed
         )

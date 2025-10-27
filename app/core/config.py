@@ -31,12 +31,6 @@ class Settings(BaseSettings):
     CALLBACK_MAX_RETRIES: int = 3
     CALLBACK_RETRY_DELAY: float = 1.0
     
-    # S3/MinIO settings (stub)
-    S3_ENDPOINT: Optional[str] = None
-    S3_ACCESS_KEY: Optional[str] = None
-    S3_SECRET_KEY: Optional[str] = None
-    S3_REGION: str = "us-east-1"
-    
     # Server settings
     HOST: str = "0.0.0.0"
     PORT: int = 8000
