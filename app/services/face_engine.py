@@ -220,11 +220,12 @@ class FaceEngine(LoggerMixin):
             if face_crop.size == 0:
                 return None
             
-            # Extract features
+            # Extract features - returns np.ndarray (512,)
             embedding = self.recognizer.extract_features(face_crop)
             
             self.logger.debug("Extracted face embedding", bbox=bbox)
-            return embedding.squeeze(0).tolist()
+            # Convert numpy array to list
+            return embedding.tolist() if embedding.ndim == 1 else embedding.squeeze().tolist()
             
         except Exception as e:
             self.logger.error("Embedding extraction failed", error=str(e))

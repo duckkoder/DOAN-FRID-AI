@@ -354,7 +354,7 @@ class FaceRecognizer:
         self,
         root: Union[str, os.PathLike[str]],
         identity: str,
-        embedding: Tensor,
+        embedding: Union[Tensor, np.ndarray],  # ✅ Support both Tensor and ndarray
     ) -> pathlib.Path:
         clean_identity = self._sanitize_identity(identity)
         root_path = pathlib.Path(root)
@@ -363,7 +363,13 @@ class FaceRecognizer:
         person_dir.mkdir(parents=True, exist_ok=True)
         existing = [p for p in person_dir.glob('embedding_*.pt')]
         next_index = len(existing) + 1
-        embedding_cpu = embedding.detach().cpu()
+        
+        # ✅ Convert numpy to tensor if needed
+        if isinstance(embedding, np.ndarray):
+            embedding_cpu = torch.from_numpy(embedding).to(dtype=torch.float32)
+        else:
+            embedding_cpu = embedding.detach().cpu()
+        
         if embedding_cpu.ndim > 1:
             embedding_cpu = embedding_cpu.view(-1)
         file_path = person_dir / f'embedding_{next_index:04d}.pt'
@@ -371,8 +377,13 @@ class FaceRecognizer:
         self.append_embedding(clean_identity, embedding)
         return file_path
 
-    def append_embedding(self, identity: str, embedding: Tensor) -> None:
-        vector = embedding.detach().to(self.device)
+    def append_embedding(self, identity: str, embedding: Union[Tensor, np.ndarray]) -> None:
+        # ✅ Convert numpy to tensor if needed
+        if isinstance(embedding, np.ndarray):
+            vector = torch.from_numpy(embedding).to(self.device, dtype=torch.float32)
+        else:
+            vector = embedding.detach().to(self.device)
+        
         if vector.ndim == 1:
             vector = vector.unsqueeze(0)
         elif vector.ndim != 2:
@@ -407,7 +418,7 @@ class FaceRecognizer:
             identity = self._sanitize_identity(person_dir.name)
             for image_path in images:
                 try:
-                    embedding = self.extract_features(image_path, tta=tta).squeeze(0)
+                    embedding = self.extract_features(image_path, tta=tta)  # Returns np.ndarray
                 except Exception:
                     continue
                 self.save_embedding(destination_path, identity, embedding)
@@ -552,7 +563,7 @@ class FaceRecognizer:
         *,
         tta: bool = False,
         tta_mode: str = 'basic',
-    ) -> Tensor:
+    ) -> np.ndarray:
         """
         Extract face embedding features with optional test-time augmentation.
         
@@ -562,7 +573,7 @@ class FaceRecognizer:
             tta_mode: 'basic' (flip only) or 'advanced' (multiple augmentations)
             
         Returns:
-            Normalized embedding tensor
+            Normalized embedding as numpy array (512,)
         """
         tensor = self._prepare_tensor(image)
         feats = self._forward_tensor(tensor)
@@ -591,7 +602,9 @@ class FaceRecognizer:
                 # Average all augmentations
                 feats = torch.stack(augmented_feats).mean(dim=0)
         
-        return l2_norm(feats).detach()
+        # ✅ FIX: Convert to CPU then numpy
+        normalized = l2_norm(feats).detach().cpu().numpy()
+        return normalized.squeeze(0) if normalized.ndim > 1 else normalized
 
     def _prepare_tensor(self, image: Union[str, os.PathLike[str], Image.Image, np.ndarray]) -> Tensor:
         pil_image = self._to_pil(image)
@@ -633,8 +646,8 @@ class FaceRecognizer:
         tta: bool = False,
     ) -> Dict[str, Union[bool, float]]:
         threshold = threshold if threshold is not None else self.threshold
-        emb_a = self.extract_features(image_a, tta=tta)
-        emb_b = self.extract_features(image_b, tta=tta)
+        emb_a = self.extract_features(image_a, tta=tta)  # Returns np.ndarray
+        emb_b = self.extract_features(image_b, tta=tta)  # Returns np.ndarray
         distance = self._distance(emb_a, emb_b)
         return {
             "distance": distance,
@@ -660,8 +673,9 @@ class FaceRecognizer:
                 if image_path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
                     continue
                 try:
-                    embedding = self.extract_features(image_path, tta=tta).squeeze(0)
-                    embeddings.append(embedding)
+                    embedding = self.extract_features(image_path, tta=tta)  # Returns np.ndarray
+                    # Convert numpy to tensor for stacking
+                    embeddings.append(torch.from_numpy(embedding))
                 except Exception:
                     continue
             if len(embeddings) >= min_images:
@@ -721,12 +735,10 @@ class FaceRecognizer:
             
         global_threshold = threshold if threshold is not None else self.threshold
         global_threshold = float(global_threshold)
-        query = self.extract_features(image, tta=tta).squeeze(0)
+        query_np = self.extract_features(image, tta=tta)  # Returns np.ndarray (512,)
         
-        # ⚠️ CRITICAL: Ensure query and gallery are on the same device
-        # If gallery is on GPU but query is on CPU (or vice versa), subtraction will fail
-        if query.device != gallery.device:
-            query = query.to(gallery.device)
+        # ✅ Convert numpy to tensor and move to same device as gallery
+        query = torch.from_numpy(query_np).to(gallery.device, dtype=torch.float32)
         
         diff = gallery - query.unsqueeze(0)
         distances_all = torch.sum(diff * diff, dim=1)
@@ -807,9 +819,16 @@ class FaceRecognizer:
         return response
 
     @staticmethod
-    def _distance(a: Tensor, b: Tensor) -> float:
+    def _distance(a: Union[Tensor, np.ndarray], b: Union[Tensor, np.ndarray]) -> float:
+        """Calculate L2 distance between two embeddings"""
+        # Convert numpy arrays to tensors if needed
+        if isinstance(a, np.ndarray):
+            a = torch.from_numpy(a)
+        if isinstance(b, np.ndarray):
+            b = torch.from_numpy(b)
+        
         diff = a - b
-        return float(torch.sum(diff * diff, dim=1).mean().item())
+        return float(torch.sum(diff * diff, dim=-1).mean().item())
 
     def assess_face_quality(self, image: Union[np.ndarray, Image.Image]) -> Dict[str, float]:
         """
