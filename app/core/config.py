@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     
     # Face Detection settings
     DETECTOR_CHECKPOINT: Optional[str] = None
-    DETECTOR_CONF_THRESHOLD: float = 0.75
+    DETECTOR_CONF_THRESHOLD: float = 0.8
     DETECTOR_NMS_THRESHOLD: float = 0.4
     DETECTOR_DEVICE: str = "cuda"
     DETECTOR_PAD: int = 10
@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     RECOGNIZER_DEVICE: str = "cuda"
     RECOGNIZER_THRESHOLD: float = 1.5
     RECOGNIZER_KNN_K: int = 5
-    RECOGNIZER_MIN_CONFIDENCE: float = 0.5
-    RECOGNIZER_MIN_VOTE_RATIO: float = 0.5
+    RECOGNIZER_MIN_CONFIDENCE: float = 0.45
+    RECOGNIZER_MIN_VOTE_RATIO: float = 0.45
     RECOGNIZER_REQUIRE_STABLE: bool = False
     
     # Dynamic threshold settings
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     # Số frame gần nhất để xem xét
     RECOGNITION_WINDOW_SIZE: int = 5
     # Confidence score trung bình tối thiểu để xác nhận
-    RECOGNITION_MIN_AVG_CONFIDENCE: float = 0.55
+    RECOGNITION_MIN_AVG_CONFIDENCE: float = 0.45
     # Tỷ lệ nhận diện thành công tối thiểu (3/5 = 0.6)
     RECOGNITION_MIN_SUCCESS_RATE: float = 0.60
     # Thời gian debounce để tránh gửi callback lặp lại (giây)
