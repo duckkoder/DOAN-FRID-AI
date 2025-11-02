@@ -46,12 +46,9 @@ class FaceRecognitionService(LoggerMixin):
         
         # Load config từ settings
         self.checkpoint_path = checkpoint_path or settings.RECOGNIZER_CHECKPOINT
-        self.device = device or settings.RECOGNIZER_DEVICE
+        self.device = device or settings.MODEL_DEVICE
         self.threshold = threshold or settings.RECOGNIZER_THRESHOLD
         self.knn_k = knn_k or settings.RECOGNIZER_KNN_K
-        self.min_confidence = settings.RECOGNIZER_MIN_CONFIDENCE
-        self.min_vote_ratio = settings.RECOGNIZER_MIN_VOTE_RATIO
-        self.require_stable = settings.RECOGNIZER_REQUIRE_STABLE
         
         if not self.checkpoint_path:
             raise ValueError("RECOGNIZER_CHECKPOINT phải được cấu hình trong settings hoặc truyền vào constructor")
@@ -109,30 +106,14 @@ class FaceRecognitionService(LoggerMixin):
         try:
             tta_enabled = tta if tta is not None else settings.TTA_ENABLED
             
+            # Model đã xử lý threshold và trả về "Unknown" nếu không đạt
+            # Không cần filter thêm ở đây
             identity = self.recognizer.identify(
                 face_crop, 
                 tta=tta_enabled,
                 gallery_embeddings=gallery_embeddings,
                 gallery_labels=gallery_labels
             )
-            
-            if identity:
-                # Áp dụng filters
-                conf = float(identity.get('confidence', 0.0))
-                vote = float(identity.get('vote_ratio', 0.0))
-                stable = bool(identity.get('stable', False))
-                
-                # Kiểm tra ngưỡng
-                if (conf < self.min_confidence) or \
-                   (vote < self.min_vote_ratio) or \
-                   (self.require_stable and not stable):
-                    identity['person'] = 'Unknown'
-                    self.logger.debug(
-                        "Identity filtered as Unknown",
-                        confidence=conf,
-                        vote_ratio=vote,
-                        stable=stable
-                    )
             
             return identity
             

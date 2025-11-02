@@ -6,13 +6,12 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Set
 
-from fastapi import APIRouter, HTTPException, status, Depends, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 
 from app.models.schemas import FrameRequest, FrameResponse, AttendanceUpdate
 from app.services.session_manager import session_manager
 from app.services.face_engine import get_face_engine
 from app.services.notifier import backend_notifier
-from app.core.security import get_current_user
 from app.core.logging import get_logger
 
 router = APIRouter()
@@ -39,16 +38,16 @@ def get_engine():
 @router.post("/sessions/{session_id}/frames", response_model=FrameResponse)
 async def process_frame(
     session_id: str,
-    request: FrameRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    request: FrameRequest
 ):
     """
     Xử lý frame ảnh
     
+    Note: This endpoint is for testing/development. Production uses WebSocket with JWT auth.
+    
     Args:
         session_id: ID của session
         request: Frame data và metadata
-        current_user: Thông tin user từ JWT
         
     Returns:
         Kết quả xử lý frame
@@ -58,7 +57,6 @@ async def process_frame(
     """
     request_logger = logger.bind(
         session_id=session_id,
-        user_id=current_user.get("sub"),
         client_seq=request.client_seq
     )
     

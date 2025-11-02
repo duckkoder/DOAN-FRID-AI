@@ -241,7 +241,7 @@ class SessionManager(LoggerMixin):
                 confirmation_threshold=getattr(settings, 'RECOGNITION_CONFIRMATION_THRESHOLD', 3),
                 window_size=getattr(settings, 'RECOGNITION_WINDOW_SIZE', 5),
                 min_avg_confidence=getattr(settings, 'RECOGNITION_MIN_AVG_CONFIDENCE', 0.5),
-                min_success_rate=getattr(settings, 'RECOGNITION_MIN_SUCCESS_RATE', 0.6),
+                min_success_rate=getattr(settings, 'RECOGNITION_MIN_FRAME_SUCCESS_RATE', 0.6),
                 debounce_seconds=getattr(settings, 'RECOGNITION_DEBOUNCE_SECONDS', 30),
                 auto_adjust_to_fps=True,  # ✅ Tự động điều chỉnh theo FPS
                 target_fps=5.0

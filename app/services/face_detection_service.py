@@ -38,7 +38,7 @@ class FaceDetectionService(LoggerMixin):
         self.checkpoint_path = checkpoint_path or settings.DETECTOR_CHECKPOINT
         self.conf_threshold = conf_threshold or settings.DETECTOR_CONF_THRESHOLD
         self.nms_threshold = nms_threshold or settings.DETECTOR_NMS_THRESHOLD
-        self.device = device or settings.DETECTOR_DEVICE
+        self.device = device or settings.MODEL_DEVICE
         self.pad = pad or settings.DETECTOR_PAD
         
         if not self.checkpoint_path:
