@@ -399,26 +399,100 @@ async def stream_frames(
                 frame_count += 1
                 last_frame_time = current_time
                 
-                # 6. Detect faces - ✅ LẤY CROPS GIỐNG /detect ENDPOINT
+                # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
                 ws_logger.info(f"[Frame {frame_count}] Detected {len(detections)} faces")
                 
-                if detections:
-                    ws_logger.info(f"[Frame {frame_count}] Detection details: {[(d.bbox, d.confidence) for d in detections]}")
+                # ✅ 6.5. ANTI-SPOOFING CHECK - Lọc fake faces
+                if detections and crops:
+                    # Check anti-spoofing cho từng face crop
+                    anti_spoofing_results = await engine.check_anti_spoofing(crops)
+                    
+                    # Prepare lists for live faces only
+                    live_detections = []
+                    live_crops = []
+                    suspicious_faces = []
+                    
+                    # Filter: chỉ giữ live faces
+                    for idx, (detection, crop, spoof_result) in enumerate(zip(detections, crops, anti_spoofing_results)):
+                        # Update detection với anti-spoofing info
+                        detection.is_live = spoof_result['is_live']
+                        detection.spoofing_type = spoof_result['label']
+                        detection.spoofing_confidence = spoof_result['confidence']
+                        
+                        if spoof_result['is_live']:
+                            # ✅ Live face - giữ lại
+                            live_detections.append(detection)
+                            live_crops.append(crop)
+                            ws_logger.info(
+                                f"[Frame {frame_count}] Live face #{idx}",
+                                bbox=detection.bbox,
+                                confidence=f"{spoof_result['confidence']:.3f}"
+                            )
+                        else:
+                            # ❌ Fake face - loại bỏ
+                            suspicious_faces.append({
+                                'bbox': detection.bbox,
+                                'type': spoof_result['label'],
+                                'confidence': spoof_result['confidence']
+                            })
+                            ws_logger.warning(
+                                f"[Frame {frame_count}] 🚨 FAKE DETECTED #{idx}",
+                                bbox=detection.bbox,
+                                spoofing_type=spoof_result['label'],
+                                confidence=f"{spoof_result['confidence']:.3f}"
+                            )
+                    
+                    # Log summary
+                    original_count = len(detections)
+                    live_count = len(live_detections)
+                    fake_count = len(suspicious_faces)
+                    
+                    ws_logger.info(
+                        f"[Frame {frame_count}] Anti-spoofing summary",
+                        original_faces=original_count,
+                        live_faces=live_count,
+                        fake_faces=fake_count
+                    )
+                    
+                    # ⚠️ Gửi alert nếu phát hiện fake faces
+                    if suspicious_faces:
+                        await websocket.send_json({
+                            "type": "anti_spoofing_alert",
+                            "frame_count": frame_count,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "suspicious_faces": suspicious_faces,
+                            "total_suspicious": fake_count,
+                            "total_live": live_count,
+                            "message": f"⚠️ Detected {fake_count} fake face(s) - Only {live_count} live face(s) will be processed"
+                        })
+                    
+                    # Cập nhật detections và crops với CHỈ live faces
+                    detections = live_detections
+                    crops = live_crops
                 
-                # 7. Recognize faces - ✅ DÙNG CROPS SẴN CÓ GIỐNG /detect ENDPOINT
+                # Nếu không có live faces sau filter
+                if not detections:
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "frame_count": frame_count,
+                        "detections": [],
+                        "total_faces": 0,
+                        "live_faces": 0,
+                        "fake_faces": 0,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    continue
+                
+                # 7. Recognize faces - CHỈ với live faces
                 detections = await engine.recognize_faces(
-                    detections,
-                    crops,  # ✅ TRUYỀN CROPS THAY VÌ frame_data
+                    detections=detections,
+                    crops=crops,
                     gallery_embeddings=session.gallery_embeddings,
                     gallery_labels=session.gallery_labels
                 )
                 
-                recognized_count = len([d for d in detections if d.student_id])
-                ws_logger.info(f"[Frame {frame_count}] Recognized {recognized_count}/{len(detections)} faces")
-                
-                if recognized_count > 0:
-                    ws_logger.info(f"[Frame {frame_count}] Recognized students: {[(d.student_id, d.student_name, d.confidence) for d in detections if d.student_id]}")
+                ws_logger.info(f"[Frame {frame_count}] Recognized {len([d for d in detections if d.student_code])} students")
                 
                 # 8. ✅ Track faces - Sử dụng per-session tracker
                 if session.face_tracker:
@@ -451,25 +525,33 @@ async def stream_frames(
                             if validation_result:
                                 validated_student_ids.add(validation_result["student_code"])  # Changed from student_id
                 
-                # 11. Send frame_processed message
+                # 9. Send response với anti-spoofing info
+                detections_data = []
+                for detection in detections:
+                    det_dict = {
+                        "bbox": detection.bbox,
+                        "confidence": detection.confidence,
+                        "track_id": detection.track_id,
+                        "student_code": detection.student_code,
+                        "student_name": detection.student_name,
+                        "recognition_confidence": detection.recognition_confidence,
+                        # ✅ Anti-spoofing fields
+                        "is_live": detection.is_live,
+                        "spoofing_type": detection.spoofing_type,
+                        "spoofing_confidence": detection.spoofing_confidence
+                    }
+                    detections_data.append(det_dict)
+                
                 await websocket.send_json({
                     "type": "frame_processed",
-                    "detections": [
-                        {
-                            "bbox": d.bbox,
-                            "track_id": d.track_id,
-                            "student_id": d.student_id,
-                            "student_name": getattr(d, 'student_name', None),  # Safe access
-                            "confidence": d.recognition_confidence if hasattr(d, 'recognition_confidence') else d.confidence,
-                            "is_validated": d.student_id in validated_student_ids if d.student_id else False
-                        }
-                        for d in detections
-                    ],
+                    "frame_count": frame_count,
+                    "detections": detections_data,
                     "total_faces": len(detections),
+                    "live_faces": len([d for d in detections if d.is_live]),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
                 
-                # 12. Send student_validated messages (only new ones)
+                # 11. Send student_validated messages (only new ones)
                 newly_validated = [student_id for student_id in validated_student_ids 
                                    if student_id not in validated_students_sent]
                 
@@ -548,7 +630,7 @@ async def stream_frames(
                 ws_logger.info("WebSocket disconnected by client")
                 break
             except Exception as e:
-                ws_logger.error("Frame processing error", error=str(e))
+                ws_logger.error("Frame processing error", error=str(e), exc_info=True)
                 await websocket.send_json({
                     "type": "error",
                     "message": f"Processing error: {str(e)}"

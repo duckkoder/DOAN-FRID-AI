@@ -16,15 +16,14 @@ async def lifespan(app: FastAPI):
     # Startup
     configure_logging()
     
-    # Import logger trước để dùng trong exception handler
     from app.core.logging import get_logger
     from pathlib import Path
     logger = get_logger(__name__)
     
-    # Khởi tạo face detection và recognition services (nếu có config)
     try:
         from app.services.face_detection_service import initialize_face_detection_service
         from app.services.face_recognition_service import initialize_face_recognition_service
+        from app.services.anti_spoofing_service import initialize_anti_spoofing_service  # ✅ THÊM
         from app.services.embedding_manager import embedding_manager
         from app.services.face_engine import initialize_face_engine
         
@@ -62,14 +61,30 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Failed to initialize face recognition service: {e}")
         
+        # ✅ Initialize anti-spoofing service (PATTERN GIỐNG detector/recognizer)
+        anti_spoofing_service = None
+        if settings.ANTISPOOFING_CHECKPOINT:  # ✅ Check config
+            try:
+                anti_spoofing_service = initialize_anti_spoofing_service(
+                    checkpoint_path=settings.ANTISPOOFING_CHECKPOINT,
+                    device=settings.ANTISPOOFING_DEVICE,
+                    threshold=settings.ANTISPOOFING_THRESHOLD
+                )
+                logger.info("✅ Anti-spoofing service initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize anti-spoofing service: {e}")
+                logger.warning("Anti-spoofing will be disabled")
+        
         # Initialize face engine
         if detector_service or recognizer_service:
-            # Initialize face engine WITHOUT validator (validator is now per-session)
+            recognition_validator = None  # Validator is now per-session
+            
             initialize_face_engine(
                 detector_service=detector_service,
                 recognizer_service=recognizer_service,
                 embedding_manager=embedding_manager,
-                recognition_validator=None  # Validator is now per-session
+                recognition_validator=recognition_validator,
+                anti_spoofing_service=anti_spoofing_service  # ✅ Pass service
             )
             logger.info("Face engine initialized (validator will be per-session)")
         else:
