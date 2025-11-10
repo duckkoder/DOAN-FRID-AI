@@ -403,41 +403,42 @@ async def stream_frames(
                 detections, crops, original_image = await engine.detect_faces(frame_data)
                 ws_logger.info(f"[Frame {frame_count}] Detected {len(detections)} faces")
                 
-                # ✅ 6.5. ANTI-SPOOFING CHECK - Lọc fake faces
+                # ✅ 6.5. ANTI-SPOOFING CHECK - Lọc spoof faces (Model mới: real/spoof)
                 if detections and crops:
                     # Check anti-spoofing cho từng face crop
                     anti_spoofing_results = await engine.check_anti_spoofing(crops)
                     
-                    # Prepare lists for live faces only
-                    live_detections = []
-                    live_crops = []
-                    suspicious_faces = []
+                    # Prepare lists for REAL faces only
+                    real_detections = []
+                    real_crops = []
+                    spoof_faces = []
                     
-                    # Filter: chỉ giữ live faces
+                    # Filter: chỉ giữ REAL faces
                     for idx, (detection, crop, spoof_result) in enumerate(zip(detections, crops, anti_spoofing_results)):
                         # Update detection với anti-spoofing info
-                        detection.is_live = spoof_result['is_live']
-                        detection.spoofing_type = spoof_result['label']
+                        detection.is_live = spoof_result['is_live']  # Backward compat (is_live = True if real)
+                        detection.spoofing_type = spoof_result['label']  # 'real' hoặc 'spoof'
                         detection.spoofing_confidence = spoof_result['confidence']
                         
                         if spoof_result['is_live']:
-                            # ✅ Live face - giữ lại
-                            live_detections.append(detection)
-                            live_crops.append(crop)
+                            # ✅ Real face - giữ lại
+                            real_detections.append(detection)
+                            real_crops.append(crop)
                             ws_logger.info(
-                                f"[Frame {frame_count}] Live face #{idx}",
+                                f"[Frame {frame_count}] ✅ Real face #{idx}",
                                 bbox=detection.bbox,
+                                label=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.3f}"
                             )
                         else:
-                            # ❌ Fake face - loại bỏ
-                            suspicious_faces.append({
+                            # ❌ Spoof face - loại bỏ
+                            spoof_faces.append({
                                 'bbox': detection.bbox,
-                                'type': spoof_result['label'],
+                                'type': spoof_result['label'],  # 'spoof'
                                 'confidence': spoof_result['confidence']
                             })
                             ws_logger.warning(
-                                f"[Frame {frame_count}] 🚨 FAKE DETECTED #{idx}",
+                                f"[Frame {frame_count}] 🚨 SPOOF DETECTED #{idx}",
                                 bbox=detection.bbox,
                                 spoofing_type=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.3f}"
@@ -445,46 +446,46 @@ async def stream_frames(
                     
                     # Log summary
                     original_count = len(detections)
-                    live_count = len(live_detections)
-                    fake_count = len(suspicious_faces)
+                    real_count = len(real_detections)
+                    spoof_count = len(spoof_faces)
                     
                     ws_logger.info(
                         f"[Frame {frame_count}] Anti-spoofing summary",
                         original_faces=original_count,
-                        live_faces=live_count,
-                        fake_faces=fake_count
+                        real_faces=real_count,
+                        spoof_faces=spoof_count
                     )
                     
-                    # ⚠️ Gửi alert nếu phát hiện fake faces
-                    if suspicious_faces:
+                    # ⚠️ Gửi alert nếu phát hiện spoof faces
+                    if spoof_faces:
                         await websocket.send_json({
                             "type": "anti_spoofing_alert",
                             "frame_count": frame_count,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "suspicious_faces": suspicious_faces,
-                            "total_suspicious": fake_count,
-                            "total_live": live_count,
-                            "message": f"⚠️ Detected {fake_count} fake face(s) - Only {live_count} live face(s) will be processed"
+                            "spoof_faces": spoof_faces,
+                            "total_spoof": spoof_count,
+                            "total_real": real_count,
+                            "message": f"⚠️ Detected {spoof_count} spoof face(s) - Only {real_count} real face(s) will be processed"
                         })
                     
-                    # Cập nhật detections và crops với CHỈ live faces
-                    detections = live_detections
-                    crops = live_crops
+                    # Cập nhật detections và crops với CHỈ REAL faces
+                    detections = real_detections
+                    crops = real_crops
                 
-                # Nếu không có live faces sau filter
+                # Nếu không có real faces sau filter
                 if not detections:
                     await websocket.send_json({
                         "type": "frame_processed",
                         "frame_count": frame_count,
                         "detections": [],
                         "total_faces": 0,
-                        "live_faces": 0,
-                        "fake_faces": 0,
+                        "real_faces": 0,
+                        "spoof_faces": 0,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
                     continue
                 
-                # 7. Recognize faces - CHỈ với live faces
+                # 7. Recognize faces - CHỈ với REAL faces
                 detections = await engine.recognize_faces(
                     detections=detections,
                     crops=crops,
@@ -547,7 +548,7 @@ async def stream_frames(
                     "frame_count": frame_count,
                     "detections": detections_data,
                     "total_faces": len(detections),
-                    "live_faces": len([d for d in detections if d.is_live]),
+                    "real_faces": len([d for d in detections if d.is_live]),  # ✅ real_faces thay vì live_faces
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
                 

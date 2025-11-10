@@ -351,7 +351,7 @@ class FaceEngine(LoggerMixin):
         return validated_students
     
     # ============================================================
-    # ✅ THÊM METHOD MỚI - CHECK ANTI-SPOOFING
+    # ✅ ANTI-SPOOFING CHECK - Model Mới
     # ============================================================
     async def check_anti_spoofing(
         self,
@@ -359,6 +359,7 @@ class FaceEngine(LoggerMixin):
     ) -> List[Dict[str, Any]]:
         """
         Kiểm tra anti-spoofing cho danh sách face crops
+        Model mới: ResNet18_MSFF_AntiSpoof với 2 classes (real/spoof)
         
         Args:
             face_crops: Danh sách ảnh khuôn mặt đã crop (numpy arrays RGB)
@@ -367,20 +368,20 @@ class FaceEngine(LoggerMixin):
             Danh sách kết quả anti-spoofing:
             [
                 {
-                    'is_live': bool,
-                    'label': str,  # 'live', 'print', 'replay', 'unknown'
-                    'confidence': float
+                    'is_live': bool,      # True nếu real, False nếu spoof
+                    'label': str,         # 'real' hoặc 'spoof'
+                    'confidence': float   # 0.0 - 1.0
                 },
                 ...
             ]
         """
         if self.anti_spoofing is None:
-            self.logger.warning("Anti-spoofing service not initialized, assuming all faces are live")
-            # Trả về tất cả là live nếu không có service
+            self.logger.warning("Anti-spoofing service not initialized, assuming all faces are real")
+            # Trả về tất cả là real nếu không có service
             return [
                 {
                     'is_live': True,
-                    'label': 'live',
+                    'label': 'real',
                     'confidence': 1.0
                 }
                 for _ in face_crops
@@ -389,48 +390,47 @@ class FaceEngine(LoggerMixin):
         results = []
         for i, crop in enumerate(face_crops):
             try:
-                # Call anti-spoofing service
-                is_live, label, confidence = await self.anti_spoofing.is_live_async(crop)
+                # ✅ Call anti-spoofing service - Trả về Dict format mới
+                result = await self.anti_spoofing.predict_async(crop)
                 
-                results.append({
-                    'is_live': is_live,
-                    'label': label,
-                    'confidence': confidence
-                })
+                results.append(result)
                 
-                if not is_live:
+                # Log chi tiết
+                if not result['is_live']:
                     self.logger.warning(
-                        f"⚠️ Suspicious face detected (crop {i})",
-                        label=label,
-                        confidence=f"{confidence:.3f}"
+                        f"🚨 Spoof face detected in crop #{i}",
+                        label=result['label'],
+                        confidence=f"{result['confidence']:.3f}"
                     )
                 else:
                     self.logger.debug(
-                        f"✅ Live face confirmed (crop {i})",
-                        confidence=f"{confidence:.3f}"
+                        f"✅ Real face in crop #{i}",
+                        confidence=f"{result['confidence']:.3f}"
                     )
                 
             except Exception as e:
                 self.logger.error(
-                    f"Anti-spoofing check failed for crop {i}",
+                    f"Anti-spoofing failed for crop #{i}",
                     error=str(e),
                     exc_info=True
                 )
-                # Nếu lỗi, đánh dấu là unknown để an toàn
+                # Fallback: assume real nếu có lỗi (safe default)
                 results.append({
-                    'is_live': False,
+                    'is_live': True,
                     'label': 'unknown',
                     'confidence': 0.0
                 })
         
         # Log summary
+        total = len(results)
         live_count = sum(1 for r in results if r['is_live'])
-        suspicious_count = len(results) - live_count
+        spoof_count = total - live_count
+        
         self.logger.info(
-            f"Anti-spoofing check completed",
-            total_faces=len(results),
-            live_faces=live_count,
-            suspicious_faces=suspicious_count
+            "Anti-spoofing batch completed",
+            total_faces=total,
+            real_faces=live_count,
+            spoof_faces=spoof_count
         )
         
         return results

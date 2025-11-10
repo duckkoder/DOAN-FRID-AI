@@ -1,7 +1,8 @@
 """
-Anti-Spoofing Service - Phát hiện tấn công giả mạo (print, replay)
+Anti-Spoofing Service - Phát hiện tấn công giả mạo (real/spoof)
+Model mới: ResNet18_MSFF_AntiSpoof với 2 classes
 """
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 import numpy as np
 from PIL import Image
 
@@ -13,9 +14,9 @@ from models.AntiSpoofing import AntiSpoofingClassifier
 class AntiSpoofingService(LoggerMixin):
     """
     Service phát hiện tấn công giả mạo khuôn mặt
-    - live: Khuôn mặt thật
-    - print: Ảnh in
-    - replay: Video replay
+    Model mới: ResNet18_MSFF_AntiSpoof
+    - real: Khuôn mặt thật (class 0)
+    - spoof: Khuôn mặt giả (class 1) - bao gồm print, replay, mask, etc.
     """
     
     def __init__(
@@ -55,54 +56,73 @@ class AntiSpoofingService(LoggerMixin):
             self.logger.error("Failed to load Anti-Spoofing model", error=str(e))
             raise
     
-    def predict(self, face_image: np.ndarray) -> Tuple[str, float]:
+    def predict(self, face_image: np.ndarray) -> Dict[str, Any]:
         """
-        Dự đoán loại khuôn mặt
+        Dự đoán loại khuôn mặt với format mới
         
         Args:
             face_image: Ảnh khuôn mặt (numpy array RGB)
             
         Returns:
-            Tuple (label, confidence):
-                - label: 'live', 'print', hoặc 'replay'
-                - confidence: Độ tin cậy (0.0 - 1.0)
+            Dict với keys:
+                - is_live: bool (True nếu real, False nếu spoof)
+                - label: str ('real' hoặc 'spoof')
+                - confidence: float (0.0 - 1.0)
         """
         try:
             if face_image is None or face_image.size == 0:
                 self.logger.warning("Empty face image provided")
-                return "unknown", 0.0
+                return {
+                    'is_live': False,
+                    'label': 'unknown',
+                    'confidence': 0.0
+                }
             
-            # Predict
+            # Predict using classifier
             label, confidence = self.classifier.predict(face_image)
+            
+            # ✅ Determine is_live based on label
+            is_live = (label == 'real')
             
             self.logger.debug(
                 "Anti-spoofing prediction",
+                is_live=is_live,
                 label=label,
                 confidence=f"{confidence:.3f}"
             )
             
-            return label, confidence
+            return {
+                'is_live': is_live,
+                'label': label,
+                'confidence': confidence
+            }
             
         except Exception as e:
-            self.logger.error("Anti-spoofing prediction failed", error=str(e))
-            return "unknown", 0.0
+            self.logger.error("Anti-spoofing prediction failed", error=str(e), exc_info=True)
+            return {
+                'is_live': False,
+                'label': 'unknown',
+                'confidence': 0.0
+            }
     
     def is_live(self, face_image: np.ndarray) -> Tuple[bool, str, float]:
         """
-        Kiểm tra xem khuôn mặt có phải là live không
+        Kiểm tra xem khuôn mặt có phải là real không
         
         Args:
             face_image: Ảnh khuôn mặt (numpy array RGB)
             
         Returns:
             Tuple (is_live, label, confidence):
-                - is_live: True nếu là live và confidence >= threshold
-                - label: Loại khuôn mặt
+                - is_live: True nếu là real và confidence >= threshold
+                - label: 'real' hoặc 'spoof'
                 - confidence: Độ tin cậy
         """
-        label, confidence = self.predict(face_image)
+        result = self.predict(face_image)
         
-        is_live = (label == 'live') and (confidence >= self.threshold)
+        label = result['label']
+        confidence = result['confidence']
+        is_live = result['is_live'] and (confidence >= self.threshold)
         
         if not is_live:
             self.logger.warning(
@@ -114,7 +134,7 @@ class AntiSpoofingService(LoggerMixin):
         
         return is_live, label, confidence
     
-    async def predict_async(self, face_image: np.ndarray) -> Tuple[str, float]:
+    async def predict_async(self, face_image: np.ndarray) -> Dict[str, Any]:
         """Async version of predict"""
         return self.predict(face_image)
     
