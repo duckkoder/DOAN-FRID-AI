@@ -43,9 +43,9 @@ class Settings(BaseSettings):
     RECOGNIZER_KNN_K: int = 5
 
     # Anti-spoofing settings
-    DATABASE_URL: Optional[str] = None
+    # DATABASE_URL: Optional[str] = None
     ANTISPOOFING_CHECKPOINT: Optional[str] = None
-    ANTISPOOFING_THRESHOLD: float = 0.7
+    ANTISPOOFING_THRESHOLD: float = 0.55
     ANTISPOOFING_DEVICE: str = "cuda"
     
     # Dynamic threshold settings
@@ -67,9 +67,9 @@ class Settings(BaseSettings):
     # PostgreSQL pgvector connection
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "ai_attendance"
+    POSTGRES_DB: str = "attendance_db"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "Ttd02042004%40"
+    POSTGRES_PASSWORD: str = "123qwe!%40%23"
     
     @property
     def DATABASE_URL(self) -> str:
@@ -79,7 +79,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
-        extra = "ignore"  # ✅ Cho phép extra fields trong .env
 
 
 # Global settings instance
