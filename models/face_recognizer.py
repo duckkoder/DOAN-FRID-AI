@@ -198,6 +198,8 @@ class FaceRecognizer:
         per_identity_margin: float = 0.05,
         identity_threshold_min_scale: float = 0.5,
         identity_threshold_max_scale: float = 1.5,
+        confidence_distance_weight: float = 0.3,
+        confidence_vote_weight: float = 0.7,
     ) -> None:
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -223,6 +225,8 @@ class FaceRecognizer:
         self.per_identity_margin = float(per_identity_margin)
         self.identity_threshold_min_scale = float(identity_threshold_min_scale)
         self.identity_threshold_max_scale = float(identity_threshold_max_scale)
+        self.confidence_distance_weight = float(confidence_distance_weight)
+        self.confidence_vote_weight = float(confidence_vote_weight)
         self._centroids: Dict[str, Tensor] = {}
         self._identity_thresholds: Dict[str, float] = {}
         self._gallery_embeddings: Optional[Tensor] = None
@@ -783,9 +787,20 @@ class FaceRecognizer:
         distance_for_conf = centroid_distance if centroid_distance is not None else best_distance
         vote_total = sum(vote_scores.values())
         vote_ratio = float(vote_scores.get(best_name, 0.0) / vote_total) if vote_total else 0.0
-        confidence = 1.0 / (1.0 + distance_for_conf)
-        confidence *= 0.5 + 0.5 * vote_ratio
-        confidence = float(max(0.0, min(1.0, confidence)))
+        
+        # Legacy confidence (giữ lại để tương thích)
+        confidence_legacy = 1.0 / (1.0 + distance_for_conf)
+        confidence_legacy *= 0.5 + 0.5 * vote_ratio
+        confidence_legacy = float(max(0.0, min(1.0, confidence_legacy)))
+        
+        # Calibrated confidence (cải tiến)
+        confidence = self._calculate_calibrated_confidence(
+            distance=distance_for_conf,
+            threshold=used_threshold,
+            vote_ratio=vote_ratio,
+            distance_weight=self.confidence_distance_weight,
+            vote_weight=self.confidence_vote_weight
+        )
         recognized = best_name if distance_for_conf < used_threshold else "Unknown"
         candidates: List[Dict[str, float]] = []
         for name, score in vote_scores.items():
@@ -808,7 +823,8 @@ class FaceRecognizer:
             "best_candidate": best_name,
             "distance": float(best_distance),
             "centroid_distance": float(centroid_distance) if centroid_distance is not None else None,
-            "confidence": confidence,
+            "confidence": confidence,  # Calibrated confidence (new)
+            "confidence_legacy": confidence_legacy,  # Legacy confidence (for comparison)
             "threshold": float(used_threshold),
             "identity_threshold": float(identity_threshold),
             "global_threshold": float(global_threshold),
@@ -817,6 +833,60 @@ class FaceRecognizer:
             "knn_neighbors": neighbors[:k],
         }
         return response
+
+    def _calculate_calibrated_confidence(
+        self,
+        distance: float,
+        threshold: float,
+        vote_ratio: float,
+        distance_weight: float = 0.3,
+        vote_weight: float = 0.7,
+    ) -> float:
+        """
+        Tính Calibrated Confidence dựa trên nhiều factors
+        
+        Args:
+            distance: Distance giữa query và best match
+            threshold: Threshold được sử dụng (có thể là dynamic hoặc global)
+            vote_ratio: Tỷ lệ vote từ KNN (0-1)
+            distance_weight: Trọng số cho distance factor (default 30%)
+            vote_weight: Trọng số cho vote factor (default 70%)
+            
+        Returns:
+            Calibrated confidence score (0-1)
+            
+        Công thức:
+            - Distance factor: Dựa trên margin so với threshold
+              distance_factor = max(0, 1.0 - distance/threshold)
+              → Càng xa threshold càng tốt (confidence cao)
+              
+            - Vote factor: Trực tiếp từ vote_ratio
+              vote_factor = vote_ratio
+              → Càng nhiều neighbors đồng ý càng tốt
+              
+            - Calibrated confidence = distance_weight * distance_factor + vote_weight * vote_factor
+        """
+        # Factor 1: Distance margin (0-1)
+        # distance_ratio = distance / threshold
+        # Nếu distance = 0 → distance_ratio = 0 → distance_factor = 1.0 (perfect)
+        # Nếu distance = threshold → distance_ratio = 1.0 → distance_factor = 0.0 (boundary)
+        # Nếu distance > threshold → distance_ratio > 1.0 → distance_factor < 0.0 → clamp to 0
+        if threshold > 0:
+            distance_ratio = distance / threshold
+            distance_factor = max(0.0, 1.0 - distance_ratio)
+        else:
+            distance_factor = 0.0
+        
+        # Factor 2: Vote consensus (0-1)
+        vote_factor = vote_ratio
+        
+        # Weighted combination
+        confidence = distance_weight * distance_factor + vote_weight * vote_factor
+        
+        # Clamp to [0, 1]
+        confidence = max(0.0, min(1.0, confidence))
+        
+        return float(confidence)
 
     @staticmethod
     def _distance(a: Union[Tensor, np.ndarray], b: Union[Tensor, np.ndarray]) -> float:

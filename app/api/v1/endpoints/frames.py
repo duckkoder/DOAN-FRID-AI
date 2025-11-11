@@ -472,8 +472,8 @@ async def stream_frames(
                             "bbox": detection.bbox,
                             "confidence": detection.confidence,
                             "track_id": None,  # Không track spoof faces
-                            "student_code": None,
-                            "student_name": None,
+                            "student_code": "Unknown",  # ✅ Thay null thành "Unknown"
+                            "student_name": "Unknown",  # ✅ Thay null thành "Unknown"
                             "recognition_confidence": None,
                             # ✅ Anti-spoofing fields
                             "is_live": detection.is_live,
@@ -579,8 +579,8 @@ async def stream_frames(
                         "bbox": detection.bbox,
                         "confidence": detection.confidence,
                         "track_id": detection.track_id,
-                        "student_code": detection.student_code,
-                        "student_name": detection.student_name,
+                        "student_code": detection.student_code or "Unknown",  # ✅ Thay null thành "Unknown"
+                        "student_name": detection.student_name or "Unknown",  # ✅ Thay null thành "Unknown"
                         "recognition_confidence": detection.recognition_confidence,
                         # ✅ Anti-spoofing fields
                         "is_live": detection.is_live,

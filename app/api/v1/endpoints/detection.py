@@ -21,7 +21,7 @@ class FaceInfo(BaseModel):
     """Thông tin một khuôn mặt"""
     bbox: List[float] = Field(..., description="[x1, y1, x2, y2]")
     confidence: float = Field(..., description="Độ tin cậy detection")
-    person_name: Optional[str] = Field(None, description="Tên người")
+    person_name: str = Field("Unknown", description="Tên người (MSSV nếu nhận diện được, 'Unknown' nếu không)")
     recognition_confidence: Optional[float] = Field(None, description="Độ tin cậy recognition")
 
 
@@ -60,13 +60,13 @@ async def detect_faces(request: DetectRequest):
             {
                 "bbox": [100, 150, 250, 350],
                 "confidence": 0.95,
-                "person_name": "john_doe",
+                "person_name": "20200001",
                 "recognition_confidence": 0.87
             },
             {
                 "bbox": [300, 200, 450, 400],
                 "confidence": 0.92,
-                "person_name": null,
+                "person_name": "Unknown",
                 "recognition_confidence": null
             }
         ],
@@ -142,11 +142,11 @@ async def detect_faces(request: DetectRequest):
         faces = []
         recognized_count = 0
         
-        for det, crop in zip(detections, crops):
+        for idx, (det, crop) in enumerate(zip(detections, crops)):
             face_info = FaceInfo(
                 bbox=[float(x) for x in det.bbox],
                 confidence=float(det.confidence),
-                person_name=None,
+                person_name="Unknown",  # ✅ Default: "Unknown" thay vì None
                 recognition_confidence=None
             )
             
@@ -163,12 +163,39 @@ async def detect_faces(request: DetectRequest):
                             gallery_labels=gallery_labels
                         )
                         
+                        # ===== 🔍 DEBUG LOGGING =====
+                        if identity:
+                            person = identity.get('person', 'Unknown')
+                            best_candidate = identity.get('best_candidate', 'N/A')
+                            rejection_reason = identity.get('rejection_reason', 'N/A')
+                            
+                            logger.info(
+                                f"[DETECTION] Face #{idx+1} Recognition Result",
+                                person=person,
+                                best_candidate=best_candidate,
+                                rejection_reason=rejection_reason,
+                                confidence=f"{identity.get('confidence', 0):.3f}",
+                                vote_ratio=f"{identity.get('vote_ratio', 0):.3f}",
+                                distance=f"{identity.get('distance', 0):.3f}",
+                                threshold=f"{identity.get('threshold', 0):.3f}"
+                            )
+                        # ===== END DEBUG =====
+                        
                         if identity and identity.get('person') != 'Unknown':
+                            # ✅ Nhận diện thành công
                             face_info.person_name = identity.get('person')
                             face_info.recognition_confidence = float(identity.get('confidence', 0.0))
                             recognized_count += 1
+                            logger.info(f"[DETECTION] ✅ Face #{idx+1} ACCEPTED as {identity.get('person')}")
+                        else:
+                            # ✅ Bị reject hoặc Unknown → Giữ nguyên "Unknown"
+                            face_info.person_name = "Unknown"
+                            logger.info(f"[DETECTION] ❌ Face #{idx+1} REJECTED (Unknown)")
                     except Exception as e:
+                        # ✅ Lỗi recognition → Giữ nguyên "Unknown"
+                        face_info.person_name = "Unknown"
                         logger.warning(f"Recognition failed: {e}")
+            # else: crop is None → Giữ nguyên "Unknown" từ default
             
             faces.append(face_info)
         
