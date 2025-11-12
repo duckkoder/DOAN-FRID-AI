@@ -399,39 +399,159 @@ async def stream_frames(
                 frame_count += 1
                 last_frame_time = current_time
                 
-                # 6. Detect faces - ✅ LẤY CROPS GIỐNG /detect ENDPOINT
+                # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
                 ws_logger.info(f"[Frame {frame_count}] Detected {len(detections)} faces")
                 
-                if detections:
-                    ws_logger.info(f"[Frame {frame_count}] Detection details: {[(d.bbox, d.confidence) for d in detections]}")
+                # ✅ 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
+                real_crops = []  # Only real faces for recognition
+                spoof_count = 0
+                real_count = 0
                 
-                # 7. Recognize faces - ✅ DÙNG CROPS SẴN CÓ GIỐNG /detect ENDPOINT
-                detections = await engine.recognize_faces(
-                    detections,
-                    crops,  # ✅ TRUYỀN CROPS THAY VÌ frame_data
-                    gallery_embeddings=session.gallery_embeddings,
-                    gallery_labels=session.gallery_labels
-                )
+                if detections and crops:
+                    # Check anti-spoofing cho từng face crop
+                    anti_spoofing_results = await engine.check_anti_spoofing(crops)
+                    
+                    # Update ALL detections với anti-spoofing info
+                    for idx, (detection, crop, spoof_result) in enumerate(zip(detections, crops, anti_spoofing_results)):
+                        # ✅ Update detection với anti-spoofing info (cho TẤT CẢ faces)
+                        detection.is_live = spoof_result['is_live']  # True if real, False if spoof
+                        detection.spoofing_type = spoof_result['label']  # 'real' hoặc 'spoof'
+                        detection.spoofing_confidence = spoof_result['confidence']
+                        
+                        if spoof_result['is_live']:
+                            # ✅ Real face - giữ crop cho recognition
+                            real_crops.append(crop)
+                            real_count += 1
+                            ws_logger.info(
+                                f"[Frame {frame_count}] ✅ Real face #{idx}",
+                                bbox=detection.bbox,
+                                label=spoof_result['label'],
+                                confidence=f"{spoof_result['confidence']:.3f}"
+                            )
+                        else:
+                            # 🚨 Spoof face - KHÔNG loại bỏ, CHỈ đánh dấu
+                            spoof_count += 1
+                            ws_logger.warning(
+                                f"[Frame {frame_count}] 🚨 SPOOF DETECTED #{idx}",
+                                bbox=detection.bbox,
+                                spoofing_type=spoof_result['label'],
+                                confidence=f"{spoof_result['confidence']:.3f}"
+                            )
+                    
+                    # Log summary
+                    ws_logger.info(
+                        f"[Frame {frame_count}] Anti-spoofing summary",
+                        total_faces=len(detections),
+                        real_faces=real_count,
+                        spoof_faces=spoof_count
+                    )
+                    
+                    # ⚠️ Gửi alert nếu phát hiện spoof faces
+                    if spoof_count > 0:
+                        await websocket.send_json({
+                            "type": "anti_spoofing_alert",
+                            "frame_count": frame_count,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "total_spoof": spoof_count,
+                            "total_real": real_count,
+                            "message": f"⚠️ Detected {spoof_count} spoof face(s) - They will be displayed in RED but not processed for recognition"
+                        })
                 
-                recognized_count = len([d for d in detections if d.student_id])
-                ws_logger.info(f"[Frame {frame_count}] Recognized {recognized_count}/{len(detections)} faces")
+                # ✅ KEEP detections (bao gồm cả spoof faces để frontend hiển thị)
+                # crops được thay bằng real_crops (CHỈ real faces cho recognition)
                 
-                if recognized_count > 0:
-                    ws_logger.info(f"[Frame {frame_count}] Recognized students: {[(d.student_id, d.student_name, d.confidence) for d in detections if d.student_id]}")
+                # Nếu không có real faces sau filter - VẪN GỬI spoof faces về để hiển thị
+                if real_count == 0 and spoof_count > 0:
+                    # Chỉ có spoof faces - gửi về nhưng không làm gì thêm
+                    ws_logger.warning(f"[Frame {frame_count}] Only spoof faces detected - sending to frontend for display")
+                    
+                    detections_data = []
+                    for detection in detections:
+                        det_dict = {
+                            "bbox": detection.bbox,
+                            "confidence": detection.confidence,
+                            "track_id": None,  # Không track spoof faces
+                            "student_code": "Unknown",  # ✅ Thay null thành "Unknown"
+                            "student_name": "Unknown",  # ✅ Thay null thành "Unknown"
+                            "recognition_confidence": None,
+                            # ✅ Anti-spoofing fields
+                            "is_live": detection.is_live,
+                            "spoofing_type": detection.spoofing_type,
+                            "spoofing_confidence": detection.spoofing_confidence
+                        }
+                        detections_data.append(det_dict)
+                    
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "frame_count": frame_count,
+                        "detections": detections_data,
+                        "total_faces": len(detections),
+                        "real_faces": 0,
+                        "spoof_faces": spoof_count,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    continue
                 
-                # 8. ✅ Track faces - Sử dụng per-session tracker
-                if session.face_tracker:
-                    detections = await session.face_tracker.update(detections)
-                    ws_logger.info(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in detections]}")
+                # Nếu không có faces nào (cả real lẫn spoof)
+                if not detections:
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "frame_count": frame_count,
+                        "detections": [],
+                        "total_faces": 0,
+                        "real_faces": 0,
+                        "spoof_faces": 0,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    continue
+                
+                # 7. Recognize faces - CHỈ với REAL face crops
+                # ⚠️ CHÚ Ý: detections vẫn chứa TẤT CẢ faces (real + spoof)
+                # Nhưng chỉ real_crops được dùng cho recognition
+                if real_count > 0:
+                    # Tạo mapping: index của real faces trong detections
+                    real_indices = [i for i, d in enumerate(detections) if d.is_live]
+                    
+                    # Recognize CHỈ real faces
+                    recognized_detections = await engine.recognize_faces(
+                        detections=[detections[i] for i in real_indices],
+                        crops=real_crops,
+                        gallery_embeddings=session.gallery_embeddings,
+                        gallery_labels=session.gallery_labels
+                    )
+                    
+                    # Update lại vào detections gốc (chỉ real faces)
+                    for i, idx in enumerate(real_indices):
+                        detections[idx] = recognized_detections[i]
+                    
+                    ws_logger.info(f"[Frame {frame_count}] Recognized {len([d for d in recognized_detections if d.student_code])} students")
                 else:
+                    ws_logger.info(f"[Frame {frame_count}] No real faces to recognize")
+                
+                # 8. ✅ Track faces - CHỈ track REAL faces
+                if session.face_tracker and real_count > 0:
+                    # Track chỉ real faces
+                    real_detections_for_tracking = [d for d in detections if d.is_live]
+                    tracked_detections = await session.face_tracker.update(real_detections_for_tracking)
+                    
+                    # Update track_id vào detections gốc
+                    tracked_idx = 0
+                    for i, d in enumerate(detections):
+                        if d.is_live:
+                            detections[i] = tracked_detections[tracked_idx]
+                            tracked_idx += 1
+                    
+                    ws_logger.info(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in tracked_detections]}")
+                elif not session.face_tracker:
                     ws_logger.warning("No face_tracker in session")
                 
-                # 9. ✅ Update recognition history vào per-session validator
+                # 9. ✅ Update recognition history vào per-session validator - CHỈ REAL faces
                 current_timestamp = datetime.now(timezone.utc)
                 if session.recognition_validator:
                     for detection in detections:
-                        if detection.track_id and detection.student_id:
+                        # ⚠️ CHỈ update recognition history cho REAL faces
+                        if detection.is_live and detection.track_id and detection.student_id:
                             await session.recognition_validator.add_recognition(
                                 track_id=detection.track_id,
                                 student_code=detection.student_id,  # Using student_code
@@ -439,11 +559,12 @@ async def stream_frames(
                                 timestamp=current_timestamp
                             )
                 
-                # 10. ✅ Get validated students từ per-session validator
+                # 10. ✅ Get validated students từ per-session validator - CHỈ REAL faces
                 validated_student_ids = set()
                 if session.recognition_validator:
                     for detection in detections:
-                        if detection.track_id:
+                        # ⚠️ CHỈ validate REAL faces
+                        if detection.is_live and detection.track_id:
                             validation_result = await session.recognition_validator.validate_recognition(
                                 track_id=detection.track_id,
                                 current_time=current_timestamp
@@ -451,25 +572,34 @@ async def stream_frames(
                             if validation_result:
                                 validated_student_ids.add(validation_result["student_code"])  # Changed from student_id
                 
-                # 11. Send frame_processed message
+                # 11. ✅ Send response với TẤT CẢ detections (bao gồm cả spoof faces)
+                detections_data = []
+                for detection in detections:
+                    det_dict = {
+                        "bbox": detection.bbox,
+                        "confidence": detection.confidence,
+                        "track_id": detection.track_id,
+                        "student_code": detection.student_code or "Unknown",  # ✅ Thay null thành "Unknown"
+                        "student_name": detection.student_name or "Unknown",  # ✅ Thay null thành "Unknown"
+                        "recognition_confidence": detection.recognition_confidence,
+                        # ✅ Anti-spoofing fields
+                        "is_live": detection.is_live,
+                        "spoofing_type": detection.spoofing_type,
+                        "spoofing_confidence": detection.spoofing_confidence
+                    }
+                    detections_data.append(det_dict)
+                
                 await websocket.send_json({
                     "type": "frame_processed",
-                    "detections": [
-                        {
-                            "bbox": d.bbox,
-                            "track_id": d.track_id,
-                            "student_id": d.student_id,
-                            "student_name": getattr(d, 'student_name', None),  # Safe access
-                            "confidence": d.recognition_confidence if hasattr(d, 'recognition_confidence') else d.confidence,
-                            "is_validated": d.student_id in validated_student_ids if d.student_id else False
-                        }
-                        for d in detections
-                    ],
+                    "frame_count": frame_count,
+                    "detections": detections_data,
                     "total_faces": len(detections),
+                    "real_faces": real_count,
+                    "spoof_faces": spoof_count,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
                 
-                # 12. Send student_validated messages (only new ones)
+                # 11. Send student_validated messages (only new ones)
                 newly_validated = [student_id for student_id in validated_student_ids 
                                    if student_id not in validated_students_sent]
                 
@@ -480,7 +610,8 @@ async def stream_frames(
                     
                     for student_id in newly_validated:
                         # Find detection with this student_id to get track_id and student_name
-                        detection_with_student = next((d for d in detections if d.student_id == student_id), None)
+                        # ⚠️ CHỈ tìm trong REAL faces (is_live = True)
+                        detection_with_student = next((d for d in detections if d.student_id == student_id and d.is_live), None)
                         
                         if detection_with_student and detection_with_student.track_id and session.face_tracker:
                             # ✅ Get track state and stats từ per-session tracker
@@ -548,7 +679,7 @@ async def stream_frames(
                 ws_logger.info("WebSocket disconnected by client")
                 break
             except Exception as e:
-                ws_logger.error("Frame processing error", error=str(e))
+                ws_logger.error("Frame processing error", error=str(e), exc_info=True)
                 await websocket.send_json({
                     "type": "error",
                     "message": f"Processing error: {str(e)}"

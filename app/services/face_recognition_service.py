@@ -70,10 +70,58 @@ class FaceRecognitionService(LoggerMixin):
             per_identity_quantile=per_identity_quantile or settings.REC_IDENTITY_QUANTILE,
             per_identity_margin=per_identity_margin or settings.REC_IDENTITY_MARGIN,
             identity_threshold_min_scale=identity_threshold_min_scale or settings.REC_IDENTITY_MIN_SCALE,
-            identity_threshold_max_scale=identity_threshold_max_scale or settings.REC_IDENTITY_MAX_SCALE,
+            confidence_distance_weight=settings.REC_CONFIDENCE_DISTANCE_WEIGHT,
+            confidence_vote_weight=settings.REC_CONFIDENCE_VOTE_WEIGHT,
         )
         
         self.logger.info("Face Recognizer initialized successfully")
+    
+    def _should_accept_recognition(
+        self,
+        identity: Dict[str, Any],
+        min_confidence: float,
+        min_vote_ratio: float,
+        max_distance_ratio: float,
+    ) -> tuple[bool, str]:
+        """
+        Kiểm tra xem kết quả recognition có nên chấp nhận không.
+        Giúp tránh false positive (nhận nhầm người lạ thành người trong DB).
+        
+        Args:
+            identity: Kết quả từ recognizer.identify()
+            min_confidence: Confidence tối thiểu
+            min_vote_ratio: Vote ratio tối thiểu
+            max_distance_ratio: Distance ratio tối đa (distance/threshold)
+            
+        Returns:
+            (should_accept, reason)
+        """
+        person = identity.get('person', 'Unknown')
+        
+        # Đã là Unknown thì không cần check
+        if person == 'Unknown':
+            return True, 'already_unknown'
+        
+        confidence = float(identity.get('confidence', 0.0))
+        vote_ratio = float(identity.get('vote_ratio', 0.0))
+        distance = float(identity.get('distance', float('inf')))
+        threshold = float(identity.get('threshold', 1.0))
+        
+        # Check 1: Confidence quá thấp
+        if confidence < min_confidence:
+            return False, f'low_confidence ({confidence:.3f} < {min_confidence})'
+        
+        # Check 2: Vote ratio quá thấp (KNN không đủ đồng thuận)
+        if vote_ratio < min_vote_ratio:
+            return False, f'low_vote_ratio ({vote_ratio:.3f} < {min_vote_ratio})'
+        
+        # Check 3: Distance quá gần threshold (không đủ "chắc chắn")
+        # Ví dụ: distance=1.2, threshold=1.3 → ratio=0.92 > 0.85 → reject
+        distance_ratio = distance / threshold if threshold > 0 else 0
+        if distance_ratio >= max_distance_ratio:
+            return False, f'distance_too_close_to_threshold ({distance_ratio:.3f} >= {max_distance_ratio})'
+        
+        return True, 'accepted'
     
     def identify(
         self,
@@ -83,7 +131,7 @@ class FaceRecognitionService(LoggerMixin):
         gallery_labels: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Nhận diện khuôn mặt
+        Nhận diện khuôn mặt với filtering để tránh false positive
         
         Args:
             face_crop: Ảnh crop của khuôn mặt (RGB)
@@ -98,6 +146,7 @@ class FaceRecognitionService(LoggerMixin):
             - distance: Khoảng cách embedding
             - vote_ratio: Tỷ lệ vote (nếu dùng KNN)
             - threshold: Ngưỡng được sử dụng
+            - rejection_reason: Lý do reject (nếu bị reject)
             
         Note:
             If gallery_embeddings and gallery_labels are provided, they will be used
@@ -106,14 +155,52 @@ class FaceRecognitionService(LoggerMixin):
         try:
             tta_enabled = tta if tta is not None else settings.TTA_ENABLED
             
-            # Model đã xử lý threshold và trả về "Unknown" nếu không đạt
-            # Không cần filter thêm ở đây
+            # Gọi recognizer để nhận diện
             identity = self.recognizer.identify(
                 face_crop, 
                 tta=tta_enabled,
                 gallery_embeddings=gallery_embeddings,
                 gallery_labels=gallery_labels
             )
+            
+            if not identity:
+                return None
+            
+            # ===== THÊM FILTERING ĐỂ TRÁNH FALSE POSITIVE =====
+            should_accept, reason = self._should_accept_recognition(
+                identity,
+                min_confidence=settings.REC_MIN_CONFIDENCE,
+                min_vote_ratio=settings.REC_MIN_VOTE_RATIO,
+                max_distance_ratio=settings.REC_MAX_DISTANCE_RATIO,
+            )
+            
+            if not should_accept:
+                # Log lý do reject để debug
+                self.logger.info(
+                    "❌ Recognition REJECTED",
+                    best_candidate=identity.get('person'),
+                    reason=reason,
+                    confidence_calibrated=f"{identity.get('confidence', 0):.3f}",
+                    confidence_legacy=f"{identity.get('confidence_legacy', 0):.3f}",
+                    vote_ratio=f"{identity.get('vote_ratio', 0):.3f}",
+                    distance=f"{identity.get('distance', 0):.3f}",
+                    threshold=f"{identity.get('threshold', 0):.3f}",
+                )
+                
+                # Ghi đè thành Unknown nhưng giữ best_candidate để debug
+                identity['person'] = 'Unknown'
+                identity['rejection_reason'] = reason
+            else:
+                # Log khi ACCEPT (để debug)
+                self.logger.info(
+                    "✅ Recognition ACCEPTED",
+                    person=identity.get('person'),
+                    confidence_calibrated=f"{identity.get('confidence', 0):.3f}",
+                    confidence_legacy=f"{identity.get('confidence_legacy', 0):.3f}",
+                    vote_ratio=f"{identity.get('vote_ratio', 0):.3f}",
+                    distance=f"{identity.get('distance', 0):.3f}",
+                    threshold=f"{identity.get('threshold', 0):.3f}",
+                )
             
             return identity
             

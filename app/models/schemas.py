@@ -46,11 +46,19 @@ class Detection(BaseModel):
     student_name: Optional[str] = Field(None, description="Tên sinh viên nếu được nhận diện")
     recognition_confidence: Optional[float] = Field(None, description="Confidence của recognition")
     
+    # ✅ Anti-spoofing fields
+    is_live: Optional[bool] = Field(None, description="True nếu là live face, False nếu print/replay")
+    spoofing_type: Optional[str] = Field(None, description="Loại: 'live', 'print', 'replay'")
+    spoofing_confidence: Optional[float] = Field(None, description="Độ tin cậy của anti-spoofing prediction (0.0-1.0)")
+
+
     # ✅ Backward compatibility alias - for gradual migration
     @property
     def student_id(self) -> Optional[str]:
         """Alias for student_code (backward compatibility)"""
         return self.student_code
+
+
 
 
 class FrameResponse(BaseModel):

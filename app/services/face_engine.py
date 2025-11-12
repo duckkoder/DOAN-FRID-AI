@@ -26,7 +26,8 @@ class FaceEngine(LoggerMixin):
         detector_service=None,
         recognizer_service=None,
         embedding_manager=None,
-        recognition_validator=None
+        recognition_validator=None,
+        anti_spoofing_service=None  # ✅ THÊM PARAMETER MỚI
     ):
         """
         Khởi tạo FaceEngine
@@ -36,6 +37,7 @@ class FaceEngine(LoggerMixin):
             recognizer_service: FaceRecognitionService instance (optional)
             embedding_manager: EmbeddingManager instance (optional)
             recognition_validator: RecognitionValidator instance (optional)
+            anti_spoofing_service: AntiSpoofingService instance (optional) ✅ MỚI
         """
         super().__init__()
         
@@ -43,6 +45,7 @@ class FaceEngine(LoggerMixin):
         self.recognizer = recognizer_service
         self.embedding_manager = embedding_manager
         self.validator = recognition_validator
+        self.anti_spoofing = anti_spoofing_service  # ✅ THÊM ATTRIBUTE MỚI
         self._next_track_id = 1
         
         self.logger.info(
@@ -50,7 +53,8 @@ class FaceEngine(LoggerMixin):
             has_detector=self.detector is not None,
             has_recognizer=self.recognizer is not None,
             has_embedding_manager=self.embedding_manager is not None,
-            has_validator=self.validator is not None
+            has_validator=self.validator is not None,
+            has_anti_spoofing=self.anti_spoofing is not None  # ✅ THÊM LOG MỚI
         )
     
     async def detect_faces(self, frame_data: Optional[bytes] = None) -> tuple[List[Detection], List[np.ndarray], np.ndarray]:
@@ -345,6 +349,91 @@ class FaceEngine(LoggerMixin):
             self.logger.info(f"✅ Validated students: {list(validated_students)}")
         
         return validated_students
+    
+    # ============================================================
+    # ✅ ANTI-SPOOFING CHECK - Model Mới
+    # ============================================================
+    async def check_anti_spoofing(
+        self,
+        face_crops: List[np.ndarray]
+    ) -> List[Dict[str, Any]]:
+        """
+        Kiểm tra anti-spoofing cho danh sách face crops
+        Model mới: ResNet18_MSFF_AntiSpoof với 2 classes (real/spoof)
+        
+        Args:
+            face_crops: Danh sách ảnh khuôn mặt đã crop (numpy arrays RGB)
+            
+        Returns:
+            Danh sách kết quả anti-spoofing:
+            [
+                {
+                    'is_live': bool,      # True nếu real, False nếu spoof
+                    'label': str,         # 'real' hoặc 'spoof'
+                    'confidence': float   # 0.0 - 1.0
+                },
+                ...
+            ]
+        """
+        if self.anti_spoofing is None:
+            self.logger.warning("Anti-spoofing service not initialized, assuming all faces are real")
+            # Trả về tất cả là real nếu không có service
+            return [
+                {
+                    'is_live': True,
+                    'label': 'real',
+                    'confidence': 1.0
+                }
+                for _ in face_crops
+            ]
+        
+        results = []
+        for i, crop in enumerate(face_crops):
+            try:
+                # ✅ Call anti-spoofing service - Trả về Dict format mới
+                result = await self.anti_spoofing.predict_async(crop)
+                
+                results.append(result)
+                
+                # Log chi tiết
+                if not result['is_live']:
+                    self.logger.warning(
+                        f"🚨 Spoof face detected in crop #{i}",
+                        label=result['label'],
+                        confidence=f"{result['confidence']:.3f}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"✅ Real face in crop #{i}",
+                        confidence=f"{result['confidence']:.3f}"
+                    )
+                
+            except Exception as e:
+                self.logger.error(
+                    f"Anti-spoofing failed for crop #{i}",
+                    error=str(e),
+                    exc_info=True
+                )
+                # Fallback: assume real nếu có lỗi (safe default)
+                results.append({
+                    'is_live': True,
+                    'label': 'unknown',
+                    'confidence': 0.0
+                })
+        
+        # Log summary
+        total = len(results)
+        live_count = sum(1 for r in results if r['is_live'])
+        spoof_count = total - live_count
+        
+        self.logger.info(
+            "Anti-spoofing batch completed",
+            total_faces=total,
+            real_faces=live_count,
+            spoof_faces=spoof_count
+        )
+        
+        return results
 
 
 # Global face engine instance
@@ -355,7 +444,8 @@ def initialize_face_engine(
     detector_service=None,
     recognizer_service=None,
     embedding_manager=None,
-    recognition_validator=None
+    recognition_validator=None,
+    anti_spoofing_service=None  # ✅ THÊM PARAMETER MỚI
 ) -> FaceEngine:
     """
     Khởi tạo global face engine
@@ -365,6 +455,7 @@ def initialize_face_engine(
         recognizer_service: FaceRecognitionService instance
         embedding_manager: EmbeddingManager instance
         recognition_validator: RecognitionValidator instance
+        anti_spoofing_service: AntiSpoofingService instance ✅ MỚI
         
     Returns:
         FaceEngine instance
@@ -374,7 +465,8 @@ def initialize_face_engine(
         detector_service=detector_service,
         recognizer_service=recognizer_service,
         embedding_manager=embedding_manager,
-        recognition_validator=recognition_validator
+        recognition_validator=recognition_validator,
+        anti_spoofing_service=anti_spoofing_service  # ✅ THÊM PARAMETER MỚI
     )
     return face_engine
 
