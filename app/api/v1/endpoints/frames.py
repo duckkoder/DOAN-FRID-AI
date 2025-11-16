@@ -561,8 +561,17 @@ async def stream_frames(
                 
                 # 10. ✅ Get validated students từ per-session validator - CHỈ REAL faces
                 validated_student_ids = set()
+                
                 if session.recognition_validator:
-                    for detection in detections:
+                    # Tạo mapping detection index -> real_crop index
+                    detection_to_crop_idx = {}
+                    real_idx = 0
+                    for i, det in enumerate(detections):
+                        if det.is_live:
+                            detection_to_crop_idx[i] = real_idx
+                            real_idx += 1
+                    
+                    for i, detection in enumerate(detections):
                         # ⚠️ CHỈ validate REAL faces
                         if detection.is_live and detection.track_id:
                             validation_result = await session.recognition_validator.validate_recognition(
@@ -570,7 +579,18 @@ async def stream_frames(
                                 current_time=current_timestamp
                             )
                             if validation_result:
-                                validated_student_ids.add(validation_result["student_code"])  # Changed from student_id
+                                student_code = validation_result["student_code"]
+                                validated_student_ids.add(student_code)
+                                
+                                # ✅ Lưu face crop vào session memory (để lấy sau khi end_session)
+                                if i in detection_to_crop_idx:
+                                    crop_idx = detection_to_crop_idx[i]
+                                    if crop_idx < len(real_crops):
+                                        await session_manager.store_validated_student_crop(
+                                            session_id=session_id,
+                                            student_code=student_code,
+                                            face_crop=real_crops[crop_idx]
+                                        )
                 
                 # 11. ✅ Send response với TẤT CẢ detections (bao gồm cả spoof faces)
                 detections_data = []
@@ -620,6 +640,7 @@ async def stream_frames(
                             if track_state:
                                 stats = track_state.get_recognition_stats(window_size=5)
                                 
+                                # ✅ KHÔNG encode base64 nữa, ảnh đã lưu trong session memory
                                 validated_student = ValidatedStudent(
                                     student_code=student_id,
                                     student_name=getattr(detection_with_student, 'student_name', student_id),
