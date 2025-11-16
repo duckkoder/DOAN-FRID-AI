@@ -108,6 +108,69 @@ async def get_session(session_id: str):
     return session
 
 
+@router.get("/sessions/{session_id}/face-crops")
+async def get_session_face_crops(session_id: str):
+    """
+    Lấy tất cả ảnh face crops của students đã validated trong session.
+    Endpoint này được Backend gọi khi end_session để upload ảnh lên S3.
+    
+    Args:
+        session_id: ID của session
+        
+    Returns:
+        List of {student_code, face_crop_base64}
+        
+    Raises:
+        HTTPException: Nếu session không tồn tại
+    """
+    import base64
+    import cv2
+    
+    # Lấy crops từ session memory
+    crops_dict = await session_manager.get_validated_students_crops(session_id)
+    
+    if not crops_dict:
+        logger.warning("No face crops found for session", session_id=session_id)
+        return {"session_id": session_id, "face_crops": []}
+    
+    # Convert numpy arrays to base64
+    face_crops_data = []
+    for student_code, face_crop_rgb in crops_dict.items():
+        try:
+            # Convert RGB to BGR for cv2
+            face_crop_bgr = cv2.cvtColor(face_crop_rgb, cv2.COLOR_RGB2BGR)
+            
+            # Encode to JPEG bytes
+            success, buffer = cv2.imencode('.jpg', face_crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            
+            if success:
+                # Convert to base64 string
+                face_crop_base64 = base64.b64encode(buffer).decode('utf-8')
+                
+                face_crops_data.append({
+                    "student_code": student_code,
+                    "face_crop_base64": face_crop_base64
+                })
+                
+                logger.debug(f"Encoded face crop for {student_code}: {len(face_crop_base64)} bytes")
+            else:
+                logger.error(f"Failed to encode face crop for {student_code}")
+                
+        except Exception as e:
+            logger.error(f"Error encoding face crop for {student_code}: {e}")
+            continue
+    
+    logger.info(
+        f"Returning {len(face_crops_data)} face crops for session",
+        session_id=session_id
+    )
+    
+    return {
+        "session_id": session_id,
+        "face_crops": face_crops_data
+    }
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """

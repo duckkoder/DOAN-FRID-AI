@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
     # Backend Integration
-    BACKEND_JWT_SECRET: str = "your-secret-key-here-change-in-production"  # Must match Backend SECRET_KEY
-    BACKEND_CALLBACK_SECRET: str = "shared-secret-key-for-hmac-verification"  # Must match Backend AI_SERVICE_SECRET
+    BACKEND_JWT_SECRET: str = "jB9gwgsbOxaZXKWCTF8BsgYCgLOYROrnwbI4vJWa1T1zG4x0sFG63swllVES3yoj"  # Must match Backend SECRET_KEY
+    BACKEND_CALLBACK_SECRET: str = "jB9gwgsbOxaZXKWCTF8BsgYCgLOYROrnwbI4vJWa1T1zG4x0sFG63swllVES3yoj"  # Must match Backend AI_SERVICE_SECRET
     
     # JWT settings
     JWT_ALGORITHM: str = "HS256"
@@ -76,9 +76,9 @@ class Settings(BaseSettings):
     # PostgreSQL pgvector connection
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "attendance_db"
+    POSTGRES_DB: str = "ai_attendance"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "123qwe!%40%23"
+    POSTGRES_PASSWORD: str = "Ttd02042004%40"
     
     @property
     def DATABASE_URL(self) -> str:
