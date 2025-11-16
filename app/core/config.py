@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     REC_MIN_CONFIDENCE: float = 0.45      # Min calibrated confidence (cân bằng giữa strict và lenient)
     REC_MIN_VOTE_RATIO: float = 0.7       # Min vote ratio từ KNN (chặt để tránh false positive)
     REC_REQUIRE_STABLE: bool = False      # Yêu cầu stable qua temporal smoothing (để False cho đơn giản)
-    REC_MAX_DISTANCE_RATIO: float = 0.85  # ✅ Distance phải < 90% threshold (chặt hơn để an toàn)
+    REC_MAX_DISTANCE_RATIO: float = 0.95  # ✅ Distance phải < 90% threshold (chặt hơn để an toàn)
     
     # Recognition Validation Settings (Anti-premature detection)
     RECOGNITION_CONFIRMATION_THRESHOLD: int = 3  # Min recognition count in window (3/5 = 60%)
@@ -76,15 +76,15 @@ class Settings(BaseSettings):
     # PostgreSQL pgvector connection
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "ai_attendance"
+    POSTGRES_DB: str = "attendance_db"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "Ttd02042004%40"
+    POSTGRES_PASSWORD: str = "123qwe!%40%23"
     
     @property
     def DATABASE_URL(self) -> str:
         """Get PostgreSQL connection URL."""
         return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-    
+        # return f"postgresql://bietto:123qwe!%40%23@frid-db.postgres.database.azure.com:5432/attendance_db"
     class Config:
         env_file = ".env"
         case_sensitive = True

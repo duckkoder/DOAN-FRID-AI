@@ -51,7 +51,7 @@ class AntiSpoofingService(LoggerMixin):
                 checkpoint_path=self.checkpoint_path,
                 device=self.device
             )
-            self.logger.info("✅ Anti-Spoofing model loaded successfully")
+            self.logger.info("Anti-Spoofing model loaded successfully")
         except Exception as e:
             self.logger.error("Failed to load Anti-Spoofing model", error=str(e))
             raise

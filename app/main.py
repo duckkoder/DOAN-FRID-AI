@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
                     device=settings.ANTISPOOFING_DEVICE,
                     threshold=settings.ANTISPOOFING_THRESHOLD
                 )
-                logger.info("✅ Anti-spoofing service initialized")
+                logger.info("Anti-spoofing service initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize anti-spoofing service: {e}")
                 logger.warning("Anti-spoofing will be disabled")
