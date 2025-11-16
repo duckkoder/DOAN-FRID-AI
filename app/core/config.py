@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     """Cấu hình chính của ứng dụng"""
-    
+    EMBEDDING_DIR: str = ""
     # App settings
     APP_NAME: str = "AI-Service"
     APP_VERSION: str = "1.0.0"
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # Face Recognition settings
     RECOGNIZER_CHECKPOINT: Optional[str] = None
-    RECOGNIZER_THRESHOLD: float = 1.1
+    RECOGNIZER_THRESHOLD: float = 1.4
     RECOGNIZER_KNN_K: int = 5
 
     # Anti-spoofing settings
