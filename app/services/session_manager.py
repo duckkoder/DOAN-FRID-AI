@@ -38,6 +38,9 @@ class SessionData:
     # Per-session Tracker and Validator instances
     face_tracker: Optional[Any] = None  # FaceTracker instance
     recognition_validator: Optional[Any] = None  # RecognitionValidator instance
+    
+    # ✅ Storage for validated students with face crops (for end_session upload)
+    validated_students_crops: Dict[str, np.ndarray] = field(default_factory=dict)  # {student_code: face_crop_rgb}
 
 
 class SessionManager(LoggerMixin):
@@ -395,6 +398,59 @@ class SessionManager(LoggerMixin):
                 self.logger.info("Expired session cleaned up", session_id=session_id)
             
             return len(expired_sessions)
+    
+    async def store_validated_student_crop(
+        self,
+        session_id: str,
+        student_code: str,
+        face_crop: np.ndarray
+    ) -> bool:
+        """
+        Lưu face crop của student đã validated vào session memory.
+        Sẽ được lấy ra khi end_session để upload S3.
+        
+        Args:
+            session_id: ID của session
+            student_code: Mã sinh viên
+            face_crop: Ảnh khuôn mặt crop (numpy array RGB)
+            
+        Returns:
+            True nếu lưu thành công
+        """
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                self.logger.warning(f"Session not found: {session_id}")
+                return False
+            
+            # Lưu crop (overwrite nếu đã có)
+            session.validated_students_crops[student_code] = face_crop.copy()
+            
+            self.logger.debug(
+                f"Stored face crop for {student_code}",
+                session_id=session_id,
+                crop_shape=face_crop.shape
+            )
+            
+            return True
+    
+    async def get_validated_students_crops(self, session_id: str) -> Dict[str, np.ndarray]:
+        """
+        Lấy tất cả face crops của students đã validated trong session.
+        
+        Args:
+            session_id: ID của session
+            
+        Returns:
+            Dict mapping student_code -> face_crop (numpy array RGB)
+        """
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                self.logger.warning(f"Session not found: {session_id}")
+                return {}
+            
+            return session.validated_students_crops.copy()
     
     def _session_data_to_response(self, session_data: SessionData) -> SessionResponse:
         """Chuyển đổi SessionData thành SessionResponse"""

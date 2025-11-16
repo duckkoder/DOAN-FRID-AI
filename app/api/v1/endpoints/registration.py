@@ -121,10 +121,10 @@ class RegistrationService(LoggerMixin):
         )
         
         # Validate number of images
-        if len(request.face_images) != 14:
+        if len(request.face_images) != 12:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Expected 14 face images, got {len(request.face_images)}"
+                detail=f"Expected 12 face images, got {len(request.face_images)}"
             )
         
         embeddings_results = []
