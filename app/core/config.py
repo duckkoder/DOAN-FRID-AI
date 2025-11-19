@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     
     # Face Detection settings
     DETECTOR_CHECKPOINT: Optional[str] = None
-    DETECTOR_CONF_THRESHOLD: float = 0.8
+    DETECTOR_CONF_THRESHOLD: float = 0.75
     DETECTOR_NMS_THRESHOLD: float = 0.4
     DETECTOR_PAD: int = 10
 
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     REC_CONFIDENCE_VOTE_WEIGHT: float = 0.7      # 70% từ vote consensus
     
     # Recognition Filtering Settings (để tránh nhận nhầm người lạ)
-    REC_MIN_CONFIDENCE: float = 0.45      # Min calibrated confidence (cân bằng giữa strict và lenient)
+    REC_MIN_CONFIDENCE: float = 0.5      # Min calibrated confidence (cân bằng giữa strict và lenient)
     REC_MIN_VOTE_RATIO: float = 0.7       # Min vote ratio từ KNN (chặt để tránh false positive)
     REC_REQUIRE_STABLE: bool = False      # Yêu cầu stable qua temporal smoothing (để False cho đơn giản)
     REC_MAX_DISTANCE_RATIO: float = 0.95  # ✅ Distance phải < 90% threshold (chặt hơn để an toàn)
