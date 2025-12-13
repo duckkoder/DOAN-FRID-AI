@@ -1,21 +1,32 @@
-FROM python:3.11-slim
+# Base image với CUDA support
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
+# Cài Python và dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    libpq-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Set Python 3.11 as default
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
+
+# Copy và install requirements
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
+
+# Copy model files
+COPY models/ ./models/
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \
@@ -23,11 +34,11 @@ RUN useradd --create-home --shell /bin/bash app \
 USER app
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8096
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8096/api/v1/health || exit 1
 
 # Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8096"]
