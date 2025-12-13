@@ -20,7 +20,9 @@ WORKDIR /app
 
 # Copy và install requirements
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cu124 \
+    -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
