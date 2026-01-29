@@ -438,6 +438,15 @@ async def stream_frames(
                                 spoofing_type=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.3f}"
                             )
+                            
+                            # ✅ Lưu spoof face crop vào session memory (để upload S3 khi end_session)
+                            await session_manager.store_spoof_face_crop(
+                                session_id=session_id,
+                                face_crop=crop,
+                                spoofing_type=spoof_result['label'],
+                                spoofing_confidence=spoof_result['confidence'],
+                                frame_count=frame_count
+                            )
                     
                     # Log summary
                     ws_logger.info(

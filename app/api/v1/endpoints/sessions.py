@@ -171,6 +171,72 @@ async def get_session_face_crops(session_id: str):
     }
 
 
+@router.get("/sessions/{session_id}/spoof-faces")
+async def get_session_spoof_faces(session_id: str):
+    """
+    Lấy tất cả ảnh spoof faces phát hiện trong session.
+    Endpoint này được Backend gọi khi end_session để upload ảnh giả mạo lên S3.
+    
+    Args:
+        session_id: ID của session
+        
+    Returns:
+        List of {face_crop_base64, spoofing_type, spoofing_confidence, detected_at, frame_count}
+        
+    Raises:
+        HTTPException: Nếu session không tồn tại
+    """
+    import base64
+    import cv2
+    
+    # Lấy spoof crops từ session memory
+    spoof_crops = await session_manager.get_spoof_faces_crops(session_id)
+    
+    if not spoof_crops:
+        logger.info("No spoof faces found for session", session_id=session_id)
+        return {"session_id": session_id, "spoof_faces": []}
+    
+    # Convert numpy arrays to base64
+    spoof_faces_data = []
+    for idx, spoof_data in enumerate(spoof_crops):
+        try:
+            # Convert RGB to BGR for cv2
+            face_crop_bgr = cv2.cvtColor(spoof_data.face_crop, cv2.COLOR_RGB2BGR)
+            
+            # Encode to JPEG bytes
+            success, buffer = cv2.imencode('.jpg', face_crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            
+            if success:
+                # Convert to base64 string
+                face_crop_base64 = base64.b64encode(buffer).decode('utf-8')
+                
+                spoof_faces_data.append({
+                    "face_crop_base64": face_crop_base64,
+                    "spoofing_type": spoof_data.spoofing_type,
+                    "spoofing_confidence": spoof_data.spoofing_confidence,
+                    "detected_at": spoof_data.detected_at.isoformat(),
+                    "frame_count": spoof_data.frame_count
+                })
+                
+                logger.debug(f"Encoded spoof face #{idx}: {len(face_crop_base64)} bytes")
+            else:
+                logger.error(f"Failed to encode spoof face #{idx}")
+                
+        except Exception as e:
+            logger.error(f"Error encoding spoof face #{idx}: {e}")
+            continue
+    
+    logger.info(
+        f"Returning {len(spoof_faces_data)} spoof faces for session",
+        session_id=session_id
+    )
+    
+    return {
+        "session_id": session_id,
+        "spoof_faces": spoof_faces_data
+    }
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """

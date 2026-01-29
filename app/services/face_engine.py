@@ -407,7 +407,7 @@ class FaceEngine(LoggerMixin):
         try:
             # ✅ BATCH PROCESSING - Tạo tất cả tasks
             tasks = [
-                self.anti_spoofing.predict_async(crop) 
+                self.anti_spoofing.is_live_async(crop) 
                 for crop in face_crops
             ]
             
@@ -431,13 +431,20 @@ class FaceEngine(LoggerMixin):
                         'confidence': 0.0
                     })
                 else:
-                    results.append(result)
+                    # Unpack tuple (is_live, label, confidence) thành dict
+                    is_live, label, confidence = result
+                    result_dict = {
+                        'is_live': is_live,
+                        'label': label,
+                        'confidence': confidence
+                    }
+                    results.append(result_dict)
                     # Log chi tiết
-                    if not result['is_live']:
+                    if not is_live:
                         self.logger.warning(
                             f"🚨 Spoof face detected in crop #{i}",
-                            label=result['label'],
-                            confidence=f"{result['confidence']:.3f}"
+                            label=label,
+                            confidence=f"{confidence:.3f}"
                         )
             
             # Log summary
