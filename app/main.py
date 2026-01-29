@@ -21,11 +21,17 @@ async def lifespan(app: FastAPI):
     logger = get_logger(__name__)
     
     try:
+        from app.services.executor import initialize_model_executor, shutdown_model_executor
         from app.services.face_detection_service import initialize_face_detection_service
         from app.services.face_recognition_service import initialize_face_recognition_service
-        from app.services.anti_spoofing_service import initialize_anti_spoofing_service  # ✅ THÊM
+        from app.services.anti_spoofing_service import initialize_anti_spoofing_service
         from app.services.embedding_manager import embedding_manager
         from app.services.face_engine import initialize_face_engine
+        
+        # ✅ Initialize model executor for async batch processing
+        executor = initialize_model_executor()
+        await executor.initialize()
+        logger.info(f"ModelExecutor initialized with {executor.max_workers} workers")
         
         # Initialize detector
         detector_service = None
@@ -97,7 +103,15 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    pass
+    from app.core.logging import get_logger
+    logger = get_logger(__name__)
+    
+    try:
+        from app.services.executor import shutdown_model_executor
+        shutdown_model_executor()
+        logger.info("ModelExecutor shutdown complete")
+    except Exception as e:
+        logger.warning(f"Error during executor shutdown: {e}")
 
 
 # Tạo FastAPI app

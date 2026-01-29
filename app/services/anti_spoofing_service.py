@@ -135,12 +135,25 @@ class AntiSpoofingService(LoggerMixin):
         return is_live, label, confidence
     
     async def predict_async(self, face_image: np.ndarray) -> Dict[str, Any]:
-        """Async version of predict"""
-        return self.predict(face_image)
+        """
+        Async version of predict - sử dụng ThreadPoolExecutor
+        
+        Tránh block event loop khi model inference, cho phép xử lý
+        song song nhiều faces trong batch processing.
+        """
+        from app.services.executor import get_model_executor
+        
+        executor = get_model_executor()
+        return await executor.execute(self.predict, face_image)
     
     async def is_live_async(self, face_image: np.ndarray) -> Tuple[bool, str, float]:
-        """Async version of is_live"""
-        return self.is_live(face_image)
+        """
+        Async version of is_live - sử dụng ThreadPoolExecutor
+        """
+        from app.services.executor import get_model_executor
+        
+        executor = get_model_executor()
+        return await executor.execute(self.is_live, face_image)
 
 
 # ============================================================

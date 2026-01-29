@@ -252,11 +252,21 @@ class FaceRecognitionService(LoggerMixin):
         gallery_labels: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Async wrapper cho identify
+        Async wrapper cho identify - sử dụng ThreadPoolExecutor
         
-        TODO: Implement thật sự async nếu cần
+        Tránh block event loop khi model inference, cho phép xử lý
+        song song nhiều faces trong batch processing.
         """
-        return self.identify(face_crop, tta, gallery_embeddings, gallery_labels)
+        from app.services.executor import get_model_executor
+        
+        executor = get_model_executor()
+        return await executor.execute(
+            self.identify,
+            face_crop,
+            tta,
+            gallery_embeddings,
+            gallery_labels
+        )
     
     def extract_features(
         self,
