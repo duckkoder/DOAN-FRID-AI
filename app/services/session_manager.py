@@ -8,6 +8,7 @@ from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, field
 import torch
 import numpy as np
+import cv2
 
 from app.models.schemas import SessionCreateRequest, SessionResponse
 from app.core.logging import LoggerMixin
@@ -16,12 +17,42 @@ from app.services.database_service import get_database_service
 
 @dataclass
 class SpoofFaceCrop:
-    """Dữ liệu một ảnh spoof face"""
-    face_crop: np.ndarray  # Ảnh khuôn mặt crop (RGB)
+    """
+    Dữ liệu một ảnh spoof face - LƯU DẠNG NÉN ĐỂ TIẾT KIỆM MEMORY
+    """
+    face_crop_jpeg: bytes  # ✅ JPEG bytes thay vì numpy array để tiết kiệm RAM
     spoofing_type: str  # 'spoof', 'print', 'replay', etc.
     spoofing_confidence: float  # Độ tin cậy của prediction
     detected_at: datetime  # Thời điểm phát hiện
     frame_count: int  # Frame số mấy phát hiện
+    
+    def get_face_crop(self) -> np.ndarray:
+        """Decompress JPEG bytes back to RGB numpy array"""
+        nparr = np.frombuffer(self.face_crop_jpeg, np.uint8)
+        bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+@dataclass
+class ValidatedStudentCrop:
+    """
+    Dữ liệu face crop của student đã validated - LƯU DẠNG NÉN
+    """
+    face_crop_jpeg: bytes  # ✅ JPEG bytes thay vì numpy array
+    
+    def get_face_crop(self) -> np.ndarray:
+        """Decompress JPEG bytes back to RGB numpy array"""
+        nparr = np.frombuffer(self.face_crop_jpeg, np.uint8)
+        bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def _compress_face_crop(face_crop: np.ndarray, quality: int = 85) -> bytes:
+    """Compress face crop to JPEG bytes"""
+    bgr = cv2.cvtColor(face_crop, cv2.COLOR_RGB2BGR)
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+    _, buffer = cv2.imencode('.jpg', bgr, encode_params)
+    return buffer.tobytes()
 
 
 @dataclass
@@ -49,11 +80,11 @@ class SessionData:
     face_tracker: Optional[Any] = None  # FaceTracker instance
     recognition_validator: Optional[Any] = None  # RecognitionValidator instance
     
-    # ✅ Storage for validated students with face crops (for end_session upload)
-    validated_students_crops: Dict[str, np.ndarray] = field(default_factory=dict)  # {student_code: face_crop_rgb}
+    # ✅ Storage for validated students with face crops (for end_session upload) - COMPRESSED
+    validated_students_crops: Dict[str, ValidatedStudentCrop] = field(default_factory=dict)
     
-    # ✅ Storage for spoof faces detected during session (for evidence upload)
-    spoof_faces_crops: List[SpoofFaceCrop] = field(default_factory=list)  # List of spoof face detections
+    # ✅ Storage for spoof faces detected during session (for evidence upload) - COMPRESSED
+    spoof_faces_crops: List[SpoofFaceCrop] = field(default_factory=list)
 
 
 class SessionManager(LoggerMixin):
@@ -422,6 +453,8 @@ class SessionManager(LoggerMixin):
         Lưu face crop của student đã validated vào session memory.
         Sẽ được lấy ra khi end_session để upload S3.
         
+        ✅ MEMORY OPTIMIZATION: Lưu dạng JPEG compressed
+        
         Args:
             session_id: ID của session
             student_code: Mã sinh viên
@@ -436,13 +469,20 @@ class SessionManager(LoggerMixin):
                 self.logger.warning(f"Session not found: {session_id}")
                 return False
             
-            # Lưu crop (overwrite nếu đã có)
-            session.validated_students_crops[student_code] = face_crop.copy()
+            # ✅ MEMORY: Compress to JPEG bytes (~ 10-20x smaller)
+            jpeg_bytes = _compress_face_crop(face_crop, quality=85)
+            
+            # Lưu compressed crop (overwrite nếu đã có)
+            session.validated_students_crops[student_code] = ValidatedStudentCrop(
+                face_crop_jpeg=jpeg_bytes
+            )
             
             self.logger.debug(
-                f"Stored face crop for {student_code}",
+                f"Stored compressed face crop for {student_code}",
                 session_id=session_id,
-                crop_shape=face_crop.shape
+                original_size=face_crop.nbytes,
+                compressed_size=len(jpeg_bytes),
+                compression_ratio=f"{face_crop.nbytes / len(jpeg_bytes):.1f}x"
             )
             
             return True
@@ -463,7 +503,12 @@ class SessionManager(LoggerMixin):
                 self.logger.warning(f"Session not found: {session_id}")
                 return {}
             
-            return session.validated_students_crops.copy()
+            # ✅ Decompress when retrieving
+            result = {}
+            for student_code, crop_data in session.validated_students_crops.items():
+                result[student_code] = crop_data.get_face_crop()
+            
+            return result
     
     async def store_spoof_face_crop(
         self,
@@ -478,6 +523,8 @@ class SessionManager(LoggerMixin):
         
         ⚠️ QUALITY FILTER để tránh spam:
         - Phải cách ít nhất 15 frame so với ảnh trước đó
+        - ✅ MEMORY: Giới hạn tối đa 50 ảnh spoof mỗi session
+        - ✅ MEMORY: Lưu dạng JPEG compressed
         
         Args:
             session_id: ID của session
@@ -489,7 +536,10 @@ class SessionManager(LoggerMixin):
         Returns:
             True nếu lưu thành công, False nếu bị skip
         """
+        from app.core.config import settings
+        
         MIN_FRAME_GAP = 15     # Phải cách ít nhất 15 frame
+        MAX_SPOOF_CROPS = settings.MEMORY_MAX_SPOOF_CROPS  # ✅ Từ config
         
         async with self._lock:
             session = self._sessions.get(session_id)
@@ -508,9 +558,21 @@ class SessionManager(LoggerMixin):
                     )
                     return False
             
-            # Tạo SpoofFaceCrop object
+            # ✅ MEMORY: Giới hạn tối đa số ảnh spoof lưu trữ
+            if len(session.spoof_faces_crops) >= MAX_SPOOF_CROPS:
+                self.logger.warning(
+                    f"Max spoof crops reached ({MAX_SPOOF_CROPS}), skipping",
+                    session_id=session_id,
+                    frame_count=frame_count
+                )
+                return False
+            
+            # ✅ MEMORY: Compress to JPEG bytes
+            jpeg_bytes = _compress_face_crop(face_crop, quality=80)  # Lower quality for spoofs
+            
+            # Tạo SpoofFaceCrop object với compressed data
             spoof_data = SpoofFaceCrop(
-                face_crop=face_crop.copy(),
+                face_crop_jpeg=jpeg_bytes,
                 spoofing_type=spoofing_type,
                 spoofing_confidence=spoofing_confidence,
                 detected_at=datetime.now(timezone.utc),
@@ -521,11 +583,12 @@ class SessionManager(LoggerMixin):
             session.spoof_faces_crops.append(spoof_data)
             
             self.logger.info(
-                f"✅ Stored spoof #{len(session.spoof_faces_crops)}",
+                f"✅ Stored spoof #{len(session.spoof_faces_crops)} (compressed)",
                 session_id=session_id,
                 spoofing_type=spoofing_type,
                 confidence=f"{spoofing_confidence:.1%}",
-                frame_count=frame_count
+                frame_count=frame_count,
+                compressed_size=len(jpeg_bytes)
             )
             
             return True

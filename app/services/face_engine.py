@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import numpy as np
 import cv2
 from PIL import Image
+import torch
 
 from app.models.schemas import Detection
 from app.core.logging import LoggerMixin
@@ -89,11 +90,28 @@ class FaceEngine(LoggerMixin):
             # Convert BGR to RGB
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
             
+            # ✅ MEMORY OPTIMIZATION: Resize image nếu quá lớn (giảm VRAM usage)
+            h, w = image_rgb.shape[:2]
+            max_size = 1280  # Max dimension
+            if max(h, w) > max_size:
+                scale = max_size / max(h, w)
+                new_h, new_w = int(h * scale), int(w * scale)
+                image_rgb = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                self.logger.debug(f"Resized image from {w}x{h} to {new_w}x{new_h}")
+            
+            # ✅ Ensure contiguous memory layout
+            if not image_rgb.flags['C_CONTIGUOUS']:
+                image_rgb = np.ascontiguousarray(image_rgb)
+            
             # Detect faces - ✅ RETURN CROPS GIỐNG /detect ENDPOINT
             detections, crops, _ = await self.detector.detect_faces_async(
                 image_rgb,
                 return_crops=True
             )
+            
+            # ✅ MEMORY: Giải phóng image_array sau khi decode xong
+            del image_array
+            del image_bgr
             
             # Handle None results
             if detections is None:

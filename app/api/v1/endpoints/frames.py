@@ -2,6 +2,7 @@
 Frame processing endpoints with WebSocket support
 """
 import base64
+import gc
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Set
@@ -13,6 +14,7 @@ from app.services.session_manager import session_manager
 from app.services.face_engine import get_face_engine
 from app.services.notifier import backend_notifier
 from app.core.logging import get_logger
+from app.core.memory_manager import get_memory_manager
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -372,10 +374,18 @@ async def stream_frames(
         # Get face engine
         engine = get_engine()
         
+        # ✅ MEMORY OPTIMIZATION: Get memory manager and settings
+        from app.core.config import settings as app_settings
+        memory_manager = get_memory_manager()
+        memory_manager.reset_frame_counter()
+        
         # Rate limiting variables
         frame_count = 0
         last_frame_time = time.time()
         validated_students_sent = set()  # Track đã gửi để tránh duplicate
+        
+        # ✅ MEMORY: Max faces per frame từ config
+        MAX_FACES_PER_FRAME = app_settings.MEMORY_MAX_FACES_PER_FRAME
         
         # 5. Process frames
         while True:
@@ -401,7 +411,17 @@ async def stream_frames(
                 
                 # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
+                
+                # ✅ MEMORY: Giải phóng frame_data ngay sau khi detect
+                del frame_data
+                
                 ws_logger.info(f"[Frame {frame_count}] Detected {len(detections)} faces")
+                
+                # ✅ MEMORY: Giới hạn số faces xử lý mỗi frame
+                if len(detections) > MAX_FACES_PER_FRAME:
+                    ws_logger.warning(f"[Frame {frame_count}] Too many faces ({len(detections)}), limiting to {MAX_FACES_PER_FRAME}")
+                    detections = detections[:MAX_FACES_PER_FRAME]
+                    crops = crops[:MAX_FACES_PER_FRAME]
                 
                 # ✅ 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
                 real_crops = []  # Only real faces for recognition
@@ -424,19 +444,21 @@ async def stream_frames(
                             real_crops.append(crop)
                             real_count += 1
                             ws_logger.info(
-                                f"[Frame {frame_count}] ✅ Real face #{idx}",
+                                f"[Frame {frame_count}] ✅ REAL/LIVE face #{idx}",
                                 bbox=detection.bbox,
                                 label=spoof_result['label'],
-                                confidence=f"{spoof_result['confidence']:.3f}"
+                                confidence=f"{spoof_result['confidence']:.1%}",
+                                is_live=spoof_result['is_live']
                             )
                         else:
                             # 🚨 Spoof face - KHÔNG loại bỏ, CHỈ đánh dấu
                             spoof_count += 1
                             ws_logger.warning(
-                                f"[Frame {frame_count}] 🚨 SPOOF DETECTED #{idx}",
+                                f"[Frame {frame_count}] 🚨 SPOOF CONFIRMED #{idx} - WILL BE SAVED",
                                 bbox=detection.bbox,
-                                spoofing_type=spoof_result['label'],
-                                confidence=f"{spoof_result['confidence']:.3f}"
+                                label=spoof_result['label'],
+                                confidence=f"{spoof_result['confidence']:.1%}",
+                                is_live=spoof_result['is_live']
                             )
                             
                             # ✅ Lưu spoof face crop vào session memory (để upload S3 khi end_session)
@@ -693,6 +715,20 @@ async def stream_frames(
                 # 14. Increment frame counter
                 await session_manager.increment_frame_count(session_id)
                 
+                # ✅ MEMORY CLEANUP: Giải phóng các objects không cần thiết
+                del detections, crops, original_image, real_crops
+                if 'anti_spoofing_results' in dir():
+                    del anti_spoofing_results
+                
+                # ✅ MEMORY: Periodic cleanup sau mỗi N frames
+                cleanup_result = memory_manager.periodic_cleanup()
+                if cleanup_result.get('cleaned'):
+                    ws_logger.debug(
+                        f"[Frame {frame_count}] Memory cleanup performed",
+                        gc_collected=cleanup_result.get('gc_collected', 0),
+                        cuda_freed_mb=cleanup_result.get('cuda_freed_mb', 0)
+                    )
+                
                 # 15. Periodically send session status
                 if frame_count % 30 == 0:  # Every 30 frames
                     await websocket.send_json({
@@ -707,6 +743,8 @@ async def stream_frames(
                 
             except WebSocketDisconnect:
                 ws_logger.info("WebSocket disconnected by client")
+                # ✅ MEMORY: Cleanup khi disconnect
+                memory_manager.force_cleanup()
                 break
             except Exception as e:
                 ws_logger.error("Frame processing error", error=str(e), exc_info=True)
@@ -714,9 +752,13 @@ async def stream_frames(
                     "type": "error",
                     "message": f"Processing error: {str(e)}"
                 })
+                # ✅ MEMORY: Cleanup khi có lỗi
+                memory_manager.cleanup_python_gc()
     
     except Exception as e:
         ws_logger.error("WebSocket error", error=str(e))
+        # ✅ MEMORY: Final cleanup
+        memory_manager.force_cleanup()
         try:
             await websocket.close(code=1011, reason=f"Internal error: {str(e)}")
         except:

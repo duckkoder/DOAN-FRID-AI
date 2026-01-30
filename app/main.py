@@ -27,6 +27,16 @@ async def lifespan(app: FastAPI):
         from app.services.anti_spoofing_service import initialize_anti_spoofing_service
         from app.services.embedding_manager import embedding_manager
         from app.services.face_engine import initialize_face_engine
+        from app.core.memory_manager import initialize_memory_manager, shutdown_memory_manager
+        
+        # ✅ Initialize memory manager FIRST
+        memory_manager = initialize_memory_manager()
+        logger.info(
+            "MemoryManager initialized",
+            gpu_threshold=settings.MEMORY_GPU_THRESHOLD,
+            cleanup_interval=settings.MEMORY_CLEANUP_INTERVAL,
+            max_faces_per_frame=settings.MEMORY_MAX_FACES_PER_FRAME
+        )
         
         # ✅ Initialize model executor for async batch processing
         executor = initialize_model_executor()
@@ -105,6 +115,14 @@ async def lifespan(app: FastAPI):
     # Shutdown
     from app.core.logging import get_logger
     logger = get_logger(__name__)
+    
+    # ✅ Shutdown memory manager - cleanup GPU memory
+    try:
+        from app.core.memory_manager import shutdown_memory_manager
+        shutdown_memory_manager()
+        logger.info("MemoryManager shutdown complete - GPU memory released")
+    except Exception as e:
+        logger.warning(f"Error during memory manager shutdown: {e}")
     
     try:
         from app.services.executor import shutdown_model_executor

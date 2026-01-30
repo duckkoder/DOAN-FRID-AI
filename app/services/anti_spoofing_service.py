@@ -65,7 +65,7 @@ class AntiSpoofingService(LoggerMixin):
             
         Returns:
             Dict với keys:
-                - is_live: bool (True nếu real, False nếu spoof)
+                - is_live: bool (True nếu real VÀ confidence >= threshold, False nếu spoof)
                 - label: str ('real' hoặc 'spoof')
                 - confidence: float (0.0 - 1.0)
         """
@@ -81,15 +81,13 @@ class AntiSpoofingService(LoggerMixin):
             # Predict using classifier
             label, confidence = self.classifier.predict(face_image)
             
-            # ✅ Determine is_live based on label
-            is_live = (label == 'real')
-            
-            self.logger.debug(
-                "Anti-spoofing prediction",
-                is_live=is_live,
-                label=label,
-                confidence=f"{confidence:.3f}"
-            )
+            # Determine is_live based on label AND threshold
+            # Chỉ coi là SPOOF khi: label == 'spoof' VÀ confidence >= threshold
+            # Ngược lại coi là REAL (benefit of the doubt)
+            if label == 'spoof' and confidence >= self.threshold:
+                is_live = False
+            else:
+                is_live = True
             
             return {
                 'is_live': is_live,
@@ -114,25 +112,14 @@ class AntiSpoofingService(LoggerMixin):
             
         Returns:
             Tuple (is_live, label, confidence):
-                - is_live: True nếu là real và confidence >= threshold
+                - is_live: True nếu KHÔNG phải spoof chắc chắn
                 - label: 'real' hoặc 'spoof'
                 - confidence: Độ tin cậy
         """
         result = self.predict(face_image)
         
-        label = result['label']
-        confidence = result['confidence']
-        is_live = result['is_live'] and (confidence >= self.threshold)
-        
-        if not is_live:
-            self.logger.warning(
-                "⚠️ Suspicious face detected",
-                label=label,
-                confidence=f"{confidence:.3f}",
-                threshold=self.threshold
-            )
-        
-        return is_live, label, confidence
+        # ✅ Trả về trực tiếp kết quả từ predict() - logic đã được xử lý ở đó
+        return result['is_live'], result['label'], result['confidence']
     
     async def predict_async(self, face_image: np.ndarray) -> Dict[str, Any]:
         """
