@@ -193,6 +193,7 @@ class FaceRecognizer:
         threshold: float = 1.5,
         transform: Optional[T.Compose] = None,
         knn_k: int = 5,
+        knn_voting_threshold: Optional[float] = None,
         enable_dynamic_threshold: bool = True,
         per_identity_quantile: float = 0.95,
         per_identity_margin: float = 0.05,
@@ -220,6 +221,7 @@ class FaceRecognizer:
         )
         self._database: Dict[str, Tensor] = {}
         self.knn_k = max(1, int(knn_k))
+        self.knn_voting_threshold = float(knn_voting_threshold) if knn_voting_threshold is not None else float(threshold)
         self.enable_dynamic_threshold = bool(enable_dynamic_threshold)
         self.per_identity_quantile = float(per_identity_quantile)
         self.per_identity_margin = float(per_identity_margin)
@@ -753,28 +755,47 @@ class FaceRecognizer:
         vote_scores: Dict[str, float] = {}
         nearest_per_identity: Dict[str, float] = {}
         neighbors: List[Dict[str, float]] = []
+        valid_neighbors_count = 0
         topk_distance_list = topk_distances.detach().cpu().tolist()
         topk_index_list = topk_indices.detach().cpu().tolist()
+        
+        # ✅ KNN VOTING WITH THRESHOLD FILTERING
+        # Chỉ vote cho neighbors có distance < knn_voting_threshold
+        all_neighbor_distances = []  # Track all distances for stats
+        voted_neighbor_distances = []  # Track only voted distances
+        
         for dist, idx in zip(topk_distance_list, topk_index_list):
             name = labels[idx]  # Use external or internal labels
-            weight = 1.0 / (dist + 1e-6)
-            vote_scores[name] = vote_scores.get(name, 0.0) + weight
-            if name not in nearest_per_identity or dist < nearest_per_identity[name]:
-                nearest_per_identity[name] = dist
-            neighbors.append({"person": name, "distance": float(dist)})
+            all_neighbor_distances.append(dist)
+            
+            # ✅ CHECK: Distance phải < voting threshold thì mới được vote
+            if dist < self.knn_voting_threshold:
+                weight = 1.0 / (dist + 1e-6)
+                vote_scores[name] = vote_scores.get(name, 0.0) + weight
+                if name not in nearest_per_identity or dist < nearest_per_identity[name]:
+                    nearest_per_identity[name] = dist
+                neighbors.append({"person": name, "distance": float(dist), "voted": True})
+                valid_neighbors_count += 1
+                voted_neighbor_distances.append(dist)
+            else:
+                # Neighbor quá xa, không vote nhưng vẫn ghi lại để debug
+                neighbors.append({"person": name, "distance": float(dist), "voted": False})
         if vote_scores:
+            # Có ít nhất 1 neighbor pass voting threshold
             best_name = max(
                 vote_scores.items(),
                 key=lambda item: (item[1], -nearest_per_identity[item[0]]),
             )[0]
             best_distance = float(nearest_per_identity[best_name])
         else:
+            # ❌ KHÔNG CÓ neighbor nào pass voting threshold
+            # → Tất cả neighbors đều quá xa → Mark as Unknown
+            # Vẫn tìm nearest để trả về thông tin debug
             min_index = int(torch.argmin(distances_all).item())
-            best_name = labels[min_index]  # Use external or internal labels
+            best_name = "Unknown"  # ✅ Force Unknown vì không có valid vote
             best_distance = float(distances_all[min_index].item())
-            neighbors.insert(0, {"person": best_name, "distance": best_distance})
-            vote_scores[best_name] = 1.0
-            nearest_per_identity[best_name] = best_distance
+            # Không thêm vào vote_scores vì không hợp lệ
+            # vote_scores remains empty to indicate no valid neighbors
         centroid_distance = None
         # Only use centroid if internal database is used
         if use_dynamic and best_name in self._centroids:
@@ -818,6 +839,21 @@ class FaceRecognizer:
             )
         candidates.sort(key=lambda item: (item["distance"], -item["vote_score"]))
         neighbors.sort(key=lambda item: item["distance"])
+        
+        # ✅ Calculate distance statistics for debugging
+        neighbor_distance_stats = {
+            "min_distance": float(min(all_neighbor_distances)) if all_neighbor_distances else None,
+            "max_distance": float(max(all_neighbor_distances)) if all_neighbor_distances else None,
+            "mean_distance": float(sum(all_neighbor_distances) / len(all_neighbor_distances)) if all_neighbor_distances else None,
+            "nearest_distance": float(all_neighbor_distances[0]) if all_neighbor_distances else None,  # Nearest neighbor distance
+        }
+        
+        voted_distance_stats = {
+            "min_voted_distance": float(min(voted_neighbor_distances)) if voted_neighbor_distances else None,
+            "max_voted_distance": float(max(voted_neighbor_distances)) if voted_neighbor_distances else None,
+            "mean_voted_distance": float(sum(voted_neighbor_distances) / len(voted_neighbor_distances)) if voted_neighbor_distances else None,
+        }
+        
         response = {
             "person": recognized,
             "best_candidate": best_name,
@@ -828,7 +864,12 @@ class FaceRecognizer:
             "threshold": float(used_threshold),
             "identity_threshold": float(identity_threshold),
             "global_threshold": float(global_threshold),
+            "knn_voting_threshold": float(self.knn_voting_threshold),  # ✅ Threshold cho KNN voting
             "vote_ratio": vote_ratio,
+            "valid_neighbors_count": valid_neighbors_count,  # ✅ Số neighbors pass voting threshold
+            "total_neighbors": k,  # ✅ Tổng số neighbors được check
+            "neighbor_distance_stats": neighbor_distance_stats,  # ✅ Distance stats của tất cả neighbors
+            "voted_distance_stats": voted_distance_stats,  # ✅ Distance stats của neighbors được vote
             "candidates": candidates[:5],
             "knn_neighbors": neighbors[:k],
         }

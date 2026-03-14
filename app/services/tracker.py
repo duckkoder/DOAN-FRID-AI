@@ -102,9 +102,9 @@ class FaceTracker(LoggerMixin):
     
     def __init__(
         self, 
-        max_disappeared: int = 30,
+        max_disappeared: int = 2,  # ✅ Giảm từ 30s → 2s (xóa track cũ nhanh hơn)
         distance_threshold: int = 200,
-        iou_threshold: float = 0.3,
+        iou_threshold: float = 0.15,  # ✅ Giảm từ 0.3 → 0.15 (match rộng hơn cho di chuyển nhanh)
         use_iou: bool = True
     ):
         """
@@ -318,9 +318,9 @@ class FaceTracker(LoggerMixin):
 # ============= Per-Session Factory =============
 
 def create_face_tracker(
-    max_disappeared: int = 30,
+    max_disappeared: int = 2,  # ✅ Giảm từ 30s → 2s
     distance_threshold: int = 200,
-    iou_threshold: float = 0.3,
+    iou_threshold: float = 0.15,  # ✅ Giảm từ 0.3 → 0.15
     use_iou: bool = True
 ) -> FaceTracker:
     """

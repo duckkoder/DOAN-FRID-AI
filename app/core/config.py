@@ -13,10 +13,11 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    ENVIRONMENT: str = "development"  # development, staging, production
     
-    # Backend Integration
-    BACKEND_JWT_SECRET: str = "jB9gwgsbOxaZXKWCTF8BsgYCgLOYROrnwbI4vJWa1T1zG4x0sFG63swllVES3yoj"  # Must match Backend SECRET_KEY
-    BACKEND_CALLBACK_SECRET: str = "jB9gwgsbOxaZXKWCTF8BsgYCgLOYROrnwbI4vJWa1T1zG4x0sFG63swllVES3yoj"  # Must match Backend AI_SERVICE_SECRET
+    # Backend Integration - BẮT BUỘC phải set qua ENV, không có default
+    BACKEND_JWT_SECRET: str  # Must match Backend SECRET_KEY
+    BACKEND_CALLBACK_SECRET: str  # Must match Backend AI_SERVICE_SECRET
     
     # JWT settings
     JWT_ALGORITHM: str = "HS256"
@@ -27,67 +28,89 @@ class Settings(BaseSettings):
     
     # Server settings
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8069
+    
+    # Model Paths - Quan trọng cho AWS
+    EMBEDDING_DIR: str = ""
+    DETECTOR_CHECKPOINT: Optional[str] = None
+    RECOGNIZER_CHECKPOINT: Optional[str] = None
+    ANTISPOOFING_CHECKPOINT: Optional[str] = None
+    
+    # Model Device settings
+    MODEL_DEVICE: str = "cuda"
+    ANTISPOOFING_DEVICE: str = "cuda"
     
     # Face Detection settings
-    DETECTOR_CHECKPOINT: Optional[str] = None
-    DETECTOR_CONF_THRESHOLD: float = 0.8
+    DETECTOR_CONF_THRESHOLD: float = 0.75
     DETECTOR_NMS_THRESHOLD: float = 0.4
     DETECTOR_PAD: int = 10
 
-    MODEL_DEVICE: str = "cuda"
-
     # Face Recognition settings
-    RECOGNIZER_CHECKPOINT: Optional[str] = None
-    RECOGNIZER_THRESHOLD: float = 1.1
+    RECOGNIZER_THRESHOLD: float = 1.2
     RECOGNIZER_KNN_K: int = 5
+    RECOGNIZER_KNN_VOTING_THRESHOLD: float = 1.2
 
     # Anti-spoofing settings
-    ANTISPOOFING_CHECKPOINT: Optional[str] = None
     ANTISPOOFING_THRESHOLD: float = 0.55
-    ANTISPOOFING_DEVICE: str = "cuda"
-    ANTISPOOFING_BLOCK_RECOGNITION: bool = True  # ✅ Block recognition nếu anti-spoofing fail
+    ANTISPOOFING_BLOCK_RECOGNITION: bool = True
     
     # Dynamic threshold settings
     REC_ENABLE_DYNAMIC_THRESHOLD: bool = True
-    REC_IDENTITY_QUANTILE: float = 0.8  # ✅ Giảm từ 0.9 xuống 0.75 để tránh outlier
-    REC_IDENTITY_MARGIN: float = 0.20    # ✅ Tăng từ 0.15 lên 0.20 (margin_enlarged = 0.20 × 2.5 = 0.50)
-    REC_IDENTITY_MIN_SCALE: float = 0.7  # ✅ Giảm từ 0.7 xuống 0.6 (lower_bound = 60% global)
+    REC_IDENTITY_QUANTILE: float = 0.8
+    REC_IDENTITY_MARGIN: float = 0.20
+    REC_IDENTITY_MIN_SCALE: float = 0.7
 
-    # TTA (Test Time Augmentation) - Used in registration
+    # TTA (Test Time Augmentation)
     TTA_ENABLED: bool = False
     
-    # Calibrated Confidence Settings (weights cho tính toán confidence mới)
-    REC_CONFIDENCE_DISTANCE_WEIGHT: float = 0.3  # 30% từ distance margin
-    REC_CONFIDENCE_VOTE_WEIGHT: float = 0.7      # 70% từ vote consensus
+    # Calibrated Confidence Settings
+    REC_CONFIDENCE_DISTANCE_WEIGHT: float = 0.3
+    REC_CONFIDENCE_VOTE_WEIGHT: float = 0.7
     
-    # Recognition Filtering Settings (để tránh nhận nhầm người lạ)
-    REC_MIN_CONFIDENCE: float = 0.45      # Min calibrated confidence (cân bằng giữa strict và lenient)
-    REC_MIN_VOTE_RATIO: float = 0.7       # Min vote ratio từ KNN (chặt để tránh false positive)
-    REC_REQUIRE_STABLE: bool = False      # Yêu cầu stable qua temporal smoothing (để False cho đơn giản)
-    REC_MAX_DISTANCE_RATIO: float = 0.85  # ✅ Distance phải < 90% threshold (chặt hơn để an toàn)
+    # Recognition Filtering Settings
+    REC_MIN_CONFIDENCE: float = 0.5
+    REC_MIN_VOTE_RATIO: float = 0.7
+    REC_MIN_VALID_NEIGHBORS_RATIO: float = 0.7
+    REC_REQUIRE_STABLE: bool = False
+    REC_MAX_DISTANCE_RATIO: float = 0.95
     
-    # Recognition Validation Settings (Anti-premature detection)
-    RECOGNITION_CONFIRMATION_THRESHOLD: int = 3  # Min recognition count in window (3/5 = 60%)
-    RECOGNITION_WINDOW_SIZE: int = 5  # Number of recent frames to consider
-    RECOGNITION_MIN_FRAME_SUCCESS_RATE: float = 0.60  # Min success rate (3/5 = 60%)
-    RECOGNITION_DEBOUNCE_SECONDS: int = 30  # Cooldown before re-sending callback
+    # Recognition Validation Settings
+    RECOGNITION_CONFIRMATION_THRESHOLD: int = 3
+    RECOGNITION_WINDOW_SIZE: int = 5
+    RECOGNITION_MIN_FRAME_SUCCESS_RATE: float = 0.60
+    RECOGNITION_DEBOUNCE_SECONDS: int = 30
     
-    # PostgreSQL pgvector connection
+    # ✅ MEMORY OPTIMIZATION SETTINGS
+    MEMORY_GPU_THRESHOLD: float = 0.85  # Cleanup khi GPU usage > 85%
+    MEMORY_CLEANUP_INTERVAL: int = 50   # Cleanup sau mỗi N frames
+    MEMORY_MAX_FACES_PER_FRAME: int = 10  # Max faces xử lý mỗi frame
+    MEMORY_MAX_IMAGE_SIZE: int = 1280   # Max dimension cho input image
+    MEMORY_MAX_SPOOF_CROPS: int = 50    # Max spoof crops lưu mỗi session
+    MEMORY_AGGRESSIVE_GC: bool = True   # Bật aggressive garbage collection
+    
+    # PostgreSQL pgvector connection - BẮT BUỘC qua ENV
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "ai_attendance"
+    POSTGRES_DB: str = "attendance_backup"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "Ttd02042004%40"
+    POSTGRES_PASSWORD: str = "123qwe!%40%23"  # BẮT BUỘC - không có default
+    
+    # AWS S3 Settings (Optional - cho model storage trên AWS)
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
+    AWS_REGION: str = "ap-southeast-1"
+    S3_MODEL_BUCKET: Optional[str] = None
     
     @property
     def DATABASE_URL(self) -> str:
         """Get PostgreSQL connection URL."""
         return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
     
+    
     class Config:
         env_file = ".env"
-        case_sensitive = True
+        env_file_encoding = "utf-8"
+
 
 
 # Global settings instance

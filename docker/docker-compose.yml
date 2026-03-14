@@ -1,47 +1,33 @@
-version: '3.8'
-
 services:
   ai-service:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    restart: always
     ports:
-      - "8000:8000"
+      - "8096:8096"
+    env_file:
+      - ../.env
     environment:
-      - APP_NAME=AI-Service
-      - LOG_LEVEL=INFO
-      - JWT_SECRET=docker-secret-key-change-in-production
-      - JWT_AUDIENCE=ai-service
-      - JWT_ISSUER=docker-issuer
+      - NVIDIA_VISIBLE_DEVICES=all
     volumes:
-      - ../app:/app/app  # For development - mount source code
-    restart: unless-stopped
+      - ../models:/app/models:ro  # Mount models (read-only)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8096/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+    networks:
+      - ai-network
 
-  # TODO: Thêm các services khác nếu cần (Redis, MinIO, etc.)
-  # redis:
-  #   image: redis:7-alpine
-  #   ports:
-  #     - "6379:6379"
-  #   restart: unless-stopped
-
-  # minio:
-  #   image: minio/minio:latest
-  #   ports:
-  #     - "9000:9000"
-  #     - "9001:9001"
-  #   environment:
-  #     - MINIO_ROOT_USER=minioadmin
-  #     - MINIO_ROOT_PASSWORD=minioadmin
-  #   command: server /data --console-address ":9001"
-  #   volumes:
-  #     - minio_data:/data
-  #   restart: unless-stopped
-
-# volumes:
-#   minio_data:
+networks:
+  ai-network:
+    driver: bridge

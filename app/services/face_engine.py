@@ -1,6 +1,7 @@
 """
 Face Engine - Orchestrator cho face detection và recognition services
 """
+import asyncio
 import base64
 import io
 from typing import List, Optional, Dict, Any, Set
@@ -9,6 +10,7 @@ from datetime import datetime, timezone
 import numpy as np
 import cv2
 from PIL import Image
+import torch
 
 from app.models.schemas import Detection
 from app.core.logging import LoggerMixin
@@ -88,11 +90,28 @@ class FaceEngine(LoggerMixin):
             # Convert BGR to RGB
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
             
+            # ✅ MEMORY OPTIMIZATION: Resize image nếu quá lớn (giảm VRAM usage)
+            h, w = image_rgb.shape[:2]
+            max_size = 1280  # Max dimension
+            if max(h, w) > max_size:
+                scale = max_size / max(h, w)
+                new_h, new_w = int(h * scale), int(w * scale)
+                image_rgb = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                self.logger.debug(f"Resized image from {w}x{h} to {new_w}x{new_h}")
+            
+            # ✅ Ensure contiguous memory layout
+            if not image_rgb.flags['C_CONTIGUOUS']:
+                image_rgb = np.ascontiguousarray(image_rgb)
+            
             # Detect faces - ✅ RETURN CROPS GIỐNG /detect ENDPOINT
             detections, crops, _ = await self.detector.detect_faces_async(
                 image_rgb,
                 return_crops=True
             )
+            
+            # ✅ MEMORY: Giải phóng image_array sau khi decode xong
+            del image_array
+            del image_bgr
             
             # Handle None results
             if detections is None:
@@ -125,7 +144,7 @@ class FaceEngine(LoggerMixin):
         gallery_labels: Optional[List[str]] = None,
     ) -> List[Detection]:
         """
-        Nhận diện faces dựa trên embeddings database - GIỐNG ENDPOINT /detect
+        Nhận diện faces dựa trên embeddings database - BATCH PROCESSING
         
         Args:
             detections: Danh sách detections từ detect_faces
@@ -137,9 +156,8 @@ class FaceEngine(LoggerMixin):
             Danh sách detections với thông tin recognition
             
         Note:
-            If gallery_embeddings and gallery_labels are provided, they will be used
-            for recognition (session-based). Otherwise, recognizer's internal database
-            will be used (legacy mode).
+            Sử dụng asyncio.gather() để xử lý song song tất cả faces,
+            tận dụng ThreadPoolExecutor trong identify_async.
         """
         if self.recognizer is None:
             self.logger.warning("Recognizer not initialized")
@@ -153,43 +171,55 @@ class FaceEngine(LoggerMixin):
         
         # Check if we have crops
         if not crops or len(crops) != len(detections):
-            self.logger.warning(f"Crops mismatch: {len(crops)} crops vs {len(detections)} detections")
+            self.logger.warning(f"Crops mismatch: {len(crops) if crops else 0} crops vs {len(detections)} detections")
             return detections
         
         try:
-            # ✅ RECOGNIZE GIỐNG ENDPOINT /detect - SỬ DỤNG CROPS SẴN CÓ
-            for detection, crop in zip(detections, crops):
-                try:
-                    if crop is None or crop.size == 0:
-                        continue
-                    
-                    # Identify face - pass session embeddings if available
-                    identity = await self.recognizer.identify_async(
-                        crop,  # ✅ SỬ DỤNG CROP SẴN CÓ - KHÔNG DECODE/CROP LẠI
+            # ✅ BATCH PROCESSING - Tạo tất cả tasks trước
+            tasks = []
+            valid_indices = []
+            
+            for i, (detection, crop) in enumerate(zip(detections, crops)):
+                if crop is not None and crop.size > 0:
+                    # Tạo task cho mỗi face (chưa await)
+                    task = self.recognizer.identify_async(
+                        crop,
                         gallery_embeddings=gallery_embeddings,
                         gallery_labels=gallery_labels
                     )
-                    
-                    if identity and identity.get('person') != 'Unknown':
-                        detection.student_code = identity.get('person')  # ✅ Use student_code
-                        detection.student_name = identity.get('person')  # ✅ THÊM student_name
-                        detection.recognition_confidence = float(identity.get('confidence', 0.0))
-                    
-                except Exception as e:
+                    tasks.append(task)
+                    valid_indices.append(i)
+            
+            if not tasks:
+                self.logger.debug("No valid crops to recognize")
+                return detections
+            
+            # ✅ CHẠY TẤT CẢ SONG SONG với asyncio.gather()
+            self.logger.debug(f"Running batch recognition for {len(tasks)} faces")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # ✅ GÁN KẾT QUẢ VÀO DETECTIONS
+            for idx, result in zip(valid_indices, results):
+                if isinstance(result, Exception):
                     self.logger.warning(
                         "Failed to recognize face",
-                        track_id=detection.track_id,
-                        error=str(e)
+                        detection_index=idx,
+                        error=str(result)
                     )
                     continue
+                
+                if result and result.get('person') != 'Unknown':
+                    detections[idx].student_code = result.get('person')
+                    detections[idx].student_name = result.get('person')
+                    detections[idx].recognition_confidence = float(result.get('confidence', 0.0))
             
             recognized_count = sum(1 for d in detections if d.student_id)
-            self.logger.debug(f"Recognized {recognized_count}/{len(detections)} faces")
+            self.logger.debug(f"Batch recognized {recognized_count}/{len(detections)} faces")
             
             return detections
             
         except Exception as e:
-            self.logger.error("Face recognition failed", error=str(e))
+            self.logger.error("Batch face recognition failed", error=str(e))
             return detections
     
     async def extract_embeddings(
@@ -351,14 +381,14 @@ class FaceEngine(LoggerMixin):
         return validated_students
     
     # ============================================================
-    # ✅ ANTI-SPOOFING CHECK - Model Mới
+    # ✅ ANTI-SPOOFING CHECK - BATCH PROCESSING
     # ============================================================
     async def check_anti_spoofing(
         self,
         face_crops: List[np.ndarray]
     ) -> List[Dict[str, Any]]:
         """
-        Kiểm tra anti-spoofing cho danh sách face crops
+        Kiểm tra anti-spoofing cho danh sách face crops - BATCH PROCESSING
         Model mới: ResNet18_MSFF_AntiSpoof với 2 classes (real/spoof)
         
         Args:
@@ -374,10 +404,15 @@ class FaceEngine(LoggerMixin):
                 },
                 ...
             ]
+            
+        Note:
+            Sử dụng asyncio.gather() để xử lý song song tất cả faces.
         """
+        if not face_crops:
+            return []
+        
         if self.anti_spoofing is None:
             self.logger.warning("Anti-spoofing service not initialized, assuming all faces are real")
-            # Trả về tất cả là real nếu không có service
             return [
                 {
                     'is_live': True,
@@ -387,53 +422,70 @@ class FaceEngine(LoggerMixin):
                 for _ in face_crops
             ]
         
-        results = []
-        for i, crop in enumerate(face_crops):
-            try:
-                # ✅ Call anti-spoofing service - Trả về Dict format mới
-                result = await self.anti_spoofing.predict_async(crop)
-                
-                results.append(result)
-                
-                # Log chi tiết
-                if not result['is_live']:
-                    self.logger.warning(
-                        f"🚨 Spoof face detected in crop #{i}",
-                        label=result['label'],
-                        confidence=f"{result['confidence']:.3f}"
+        try:
+            # ✅ BATCH PROCESSING - Tạo tất cả tasks
+            tasks = [
+                self.anti_spoofing.is_live_async(crop) 
+                for crop in face_crops
+            ]
+            
+            self.logger.debug(f"Running batch anti-spoofing for {len(tasks)} faces")
+            
+            # ✅ CHẠY TẤT CẢ SONG SONG
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # ✅ XỬ LÝ KẾT QUẢ VÀ EXCEPTIONS
+            results = []
+            for i, result in enumerate(raw_results):
+                if isinstance(result, Exception):
+                    self.logger.error(
+                        f"Anti-spoofing failed for crop #{i}",
+                        error=str(result)
                     )
+                    # Fallback: assume real nếu có lỗi (safe default)
+                    results.append({
+                        'is_live': True,
+                        'label': 'unknown',
+                        'confidence': 0.0
+                    })
                 else:
-                    self.logger.debug(
-                        f"✅ Real face in crop #{i}",
-                        confidence=f"{result['confidence']:.3f}"
-                    )
-                
-            except Exception as e:
-                self.logger.error(
-                    f"Anti-spoofing failed for crop #{i}",
-                    error=str(e),
-                    exc_info=True
-                )
-                # Fallback: assume real nếu có lỗi (safe default)
-                results.append({
-                    'is_live': True,
-                    'label': 'unknown',
-                    'confidence': 0.0
-                })
-        
-        # Log summary
-        total = len(results)
-        live_count = sum(1 for r in results if r['is_live'])
-        spoof_count = total - live_count
-        
-        self.logger.info(
-            "Anti-spoofing batch completed",
-            total_faces=total,
-            real_faces=live_count,
-            spoof_faces=spoof_count
-        )
-        
-        return results
+                    # Unpack tuple (is_live, label, confidence) thành dict
+                    is_live, label, confidence = result
+                    result_dict = {
+                        'is_live': is_live,
+                        'label': label,
+                        'confidence': confidence
+                    }
+                    results.append(result_dict)
+                    # Log chi tiết
+                    if not is_live:
+                        self.logger.warning(
+                            f"🚨 Spoof face detected in crop #{i}",
+                            label=label,
+                            confidence=f"{confidence:.3f}"
+                        )
+            
+            # Log summary
+            total = len(results)
+            live_count = sum(1 for r in results if r['is_live'])
+            spoof_count = total - live_count
+            
+            self.logger.info(
+                "Anti-spoofing batch completed",
+                total_faces=total,
+                real_faces=live_count,
+                spoof_faces=spoof_count
+            )
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error("Batch anti-spoofing failed", error=str(e))
+            # Fallback: return all as real
+            return [
+                {'is_live': True, 'label': 'unknown', 'confidence': 0.0}
+                for _ in face_crops
+            ]
 
 
 # Global face engine instance

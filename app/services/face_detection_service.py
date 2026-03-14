@@ -7,6 +7,7 @@ import numpy as np
 from models.face_detector import YOLOFaceDetector, Detection
 from app.core.config import settings
 from app.core.logging import LoggerMixin
+from app.services.executor import get_model_executor
 
 
 class FaceDetectionService(LoggerMixin):
@@ -106,11 +107,17 @@ class FaceDetectionService(LoggerMixin):
         pad: Optional[int] = None
     ) -> Tuple[List[Detection], Optional[List[np.ndarray]], np.ndarray]:
         """
-        Async wrapper cho detect_faces
+        Async wrapper cho detect_faces - sử dụng ThreadPoolExecutor
         
-        TODO: Implement thật sự async nếu cần (thread pool executor)
+        Tránh block event loop khi model inference
         """
-        return self.detect_faces(image_rgb, return_crops, pad)
+        executor = get_model_executor()
+        return await executor.execute(
+            self.detect_faces, 
+            image_rgb, 
+            return_crops, 
+            pad
+        )
     
     def get_best_detection(
         self,
