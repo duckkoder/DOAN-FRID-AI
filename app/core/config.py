@@ -91,9 +91,9 @@ class Settings(BaseSettings):
     # PostgreSQL pgvector connection - BẮT BUỘC qua ENV
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "attendance_backup"
+    POSTGRES_DB: str = "ai_attendance"
     POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "123qwe!%40%23"  # BẮT BUỘC - không có default
+    POSTGRES_PASSWORD: str  # BẮT BUỘC - set qua ENV, không có default
     
     # AWS S3 Settings (Optional - cho model storage trên AWS)
     AWS_ACCESS_KEY_ID: Optional[str] = None
