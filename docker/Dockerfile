@@ -28,9 +28,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application code
 COPY app/ ./app/
+COPY models/ ./models/
 
-# Tạo thư mục models (sẽ được mount từ host volume khi chạy)
-RUN mkdir -p /app/models
+# Tạo thư mục weights (sẽ chứa file .pth từ host volume)
+RUN mkdir -p /app/weights
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser \
