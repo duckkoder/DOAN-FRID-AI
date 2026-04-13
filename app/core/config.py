@@ -1,6 +1,7 @@
 """
 Cấu hình ứng dụng sử dụng pydantic-settings
 """
+import urllib.parse
 from typing import Optional
 from pydantic_settings import BaseSettings
 
@@ -95,16 +96,18 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str  # BẮT BUỘC - set qua ENV, không có default
     
-    # AWS S3 Settings (Optional - cho model storage trên AWS)
-    AWS_ACCESS_KEY_ID: Optional[str] = None
-    AWS_SECRET_ACCESS_KEY: Optional[str] = None
-    AWS_REGION: str = "ap-southeast-1"
-    S3_MODEL_BUCKET: Optional[str] = None
+    # Cho phép ghi đè trực tiếp nguyên cả URL nếu muốn
+    DATABASE_URL_OVERRIDE: Optional[str] = None
     
     @property
     def DATABASE_URL(self) -> str:
         """Get PostgreSQL connection URL."""
-        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        if self.DATABASE_URL_OVERRIDE:
+            return self.DATABASE_URL_OVERRIDE
+        
+        # Mã hóa mật khẩu để xử lý ký tự đặc biệt (ví dụ dấu @)
+        safe_password = urllib.parse.quote_plus(self.POSTGRES_PASSWORD)
+        return f"postgresql://{self.POSTGRES_USER}:{safe_password}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
     
     
     class Config:
