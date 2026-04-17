@@ -42,43 +42,43 @@ class Settings(BaseSettings):
     ANTISPOOFING_DEVICE: str = "cuda"
     
     # Face Detection settings
-    DETECTOR_CONF_THRESHOLD: float = 0.75
-    DETECTOR_NMS_THRESHOLD: float = 0.4
-    DETECTOR_PAD: int = 10
+    DETECTOR_CONF_THRESHOLD: float
+    DETECTOR_NMS_THRESHOLD: float
+    DETECTOR_PAD: int
 
     # Face Recognition settings
-    RECOGNIZER_THRESHOLD: float = 1.2
-    RECOGNIZER_KNN_K: int = 5
-    RECOGNIZER_KNN_VOTING_THRESHOLD: float = 1.2
+    RECOGNIZER_THRESHOLD: float
+    RECOGNIZER_KNN_K: int
+    RECOGNIZER_KNN_VOTING_THRESHOLD: float
 
     # Anti-spoofing settings
-    ANTISPOOFING_THRESHOLD: float = 0.55
-    ANTISPOOFING_BLOCK_RECOGNITION: bool = True
+    ANTISPOOFING_THRESHOLD: float
+    ANTISPOOFING_BLOCK_RECOGNITION: bool
     
     # Dynamic threshold settings
-    REC_ENABLE_DYNAMIC_THRESHOLD: bool = True
-    REC_IDENTITY_QUANTILE: float = 0.8
-    REC_IDENTITY_MARGIN: float = 0.20
-    REC_IDENTITY_MIN_SCALE: float = 0.7
+    REC_ENABLE_DYNAMIC_THRESHOLD: bool
+    REC_IDENTITY_QUANTILE: float
+    REC_IDENTITY_MARGIN: float
+    REC_IDENTITY_MIN_SCALE: float
 
     # TTA (Test Time Augmentation)
-    TTA_ENABLED: bool = False
+    TTA_ENABLED: bool
     
     # Calibrated Confidence Settings
-    REC_CONFIDENCE_DISTANCE_WEIGHT: float = 0.3
-    REC_CONFIDENCE_VOTE_WEIGHT: float = 0.7
+    REC_CONFIDENCE_DISTANCE_WEIGHT: float
+    REC_CONFIDENCE_VOTE_WEIGHT: float
     
     # Recognition Filtering Settings
-    REC_MIN_CONFIDENCE: float = 0.5
-    REC_MIN_VOTE_RATIO: float = 0.7
-    REC_MIN_VALID_NEIGHBORS_RATIO: float = 0.7
-    REC_REQUIRE_STABLE: bool = False
-    REC_MAX_DISTANCE_RATIO: float = 0.95
+    REC_MIN_CONFIDENCE: float
+    REC_MIN_VOTE_RATIO: float
+    REC_MIN_VALID_NEIGHBORS_RATIO: float
+    REC_REQUIRE_STABLE: bool
+    REC_MAX_DISTANCE_RATIO: float
     
     # Recognition Validation Settings
-    RECOGNITION_CONFIRMATION_THRESHOLD: int = 3
-    RECOGNITION_WINDOW_SIZE: int = 5
-    RECOGNITION_MIN_FRAME_SUCCESS_RATE: float = 0.60
+    RECOGNITION_CONFIRMATION_THRESHOLD: int
+    RECOGNITION_WINDOW_SIZE: int
+    RECOGNITION_MIN_FRAME_SUCCESS_RATE: float
     RECOGNITION_DEBOUNCE_SECONDS: int = 30
     
     # ✅ MEMORY OPTIMIZATION SETTINGS
