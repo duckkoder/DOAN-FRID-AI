@@ -170,7 +170,9 @@ class AntiSpoofingClassifier:
     """
     
     # ✅ Class mapping - PHẢI ĐÚNG THỨ TỰ TRAINING
-    CLASS_NAMES = ['real', 'spoof']  # 0: real, 1: spoof
+    # Trong notebook, Pytorch ImageFolder sắp xếp folder theo bảng chữ cái:
+    # 'fake' -> index 0, 'real' -> index 1
+    CLASS_NAMES = ['spoof', 'real']  # 0: spoof (fake), 1: real
     
     def __init__(self, checkpoint_path, device='cuda'):
         """
