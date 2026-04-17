@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
         if settings.DETECTOR_CHECKPOINT:
             try:
                 detector_service = initialize_face_detection_service()
-                logger.info("Face detection service initialized")
+                logger.info(f"Face detection service initialized with model: {settings.DETECTOR_CHECKPOINT}")
             except Exception as e:
                 logger.warning(f"Failed to initialize face detection service: {e}")
         
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         if settings.RECOGNIZER_CHECKPOINT:
             try:
                 recognizer_service = initialize_face_recognition_service()
-                logger.info("Face recognition service initialized")
+                logger.info(f"Face recognition service initialized with model: {settings.RECOGNIZER_CHECKPOINT}")
                 
                 # Load embeddings if embedding_dir exists
                 if settings.EMBEDDING_DIR:
@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
                     device=settings.ANTISPOOFING_DEVICE,
                     threshold=settings.ANTISPOOFING_THRESHOLD
                 )
-                logger.info("Anti-spoofing service initialized")
+                logger.info(f"Anti-spoofing service initialized with model: {settings.ANTISPOOFING_CHECKPOINT}")
             except Exception as e:
                 logger.warning(f"Failed to initialize anti-spoofing service: {e}")
                 logger.warning("Anti-spoofing will be disabled")

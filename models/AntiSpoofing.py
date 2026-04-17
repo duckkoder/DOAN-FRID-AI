@@ -205,10 +205,10 @@ class AntiSpoofingClassifier:
         
         self.model.eval()
         
-        # ✅ Transform - PHẢI GIỐNG TRAINING
+        # ✅ Transform - PHẢI GIỐNG TRAINING CAO NHẤT CÓ THỂ
+        # Lúc train dùng transforms.Resize((224, 224)), nếu dùng CenterCrop sẽ bị mất rìa ảnh
         self.transform = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])

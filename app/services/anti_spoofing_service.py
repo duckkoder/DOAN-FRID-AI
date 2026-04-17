@@ -81,6 +81,14 @@ class AntiSpoofingService(LoggerMixin):
             # Predict using classifier
             label, confidence = self.classifier.predict(face_image)
             
+            # Log prediction for debugging
+            self.logger.debug(
+                "Anti-spoofing raw prediction",
+                label=label,
+                confidence=f"{confidence:.4f}",
+                threshold=self.threshold
+            )
+            
             # Determine is_live based on label AND threshold
             # Chỉ coi là SPOOF khi: label == 'spoof' VÀ confidence >= threshold
             # Ngược lại coi là REAL (benefit of the doubt)
