@@ -31,6 +31,18 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8069
     
+    # Gemini API (RAG)
+    GEMINI_API_KEY: str # Set via ENV: GEMINI_API_KEY
+
+    # RAG embedding model (default: vietnamese-bi-encoder)
+    RAG_BI_ENCODER_MODEL: str = "bkai-foundation-models/vietnamese-bi-encoder"
+
+    # AWS S3 (for downloading PDFs during RAG ingestion)
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "ap-southeast-1"
+    S3_MODEL_BUCKET: str = ""
+
     # Model Paths - Quan trọng cho AWS
     EMBEDDING_DIR: str = ""
     DETECTOR_CHECKPOINT: Optional[str] = None
