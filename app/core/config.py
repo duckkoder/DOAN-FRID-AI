@@ -81,12 +81,12 @@ class Settings(BaseSettings):
     RECOGNITION_MIN_FRAME_SUCCESS_RATE: float
     RECOGNITION_DEBOUNCE_SECONDS: int = 30
     
-    # ✅ MEMORY OPTIMIZATION SETTINGS
-    MEMORY_GPU_THRESHOLD: float = 0.85  # Cleanup khi GPU usage > 85%
-    MEMORY_CLEANUP_INTERVAL: int = 50   # Cleanup sau mỗi N frames
-    MEMORY_MAX_FACES_PER_FRAME: int = 10  # Max faces xử lý mỗi frame
+    # ✅ MEMORY OPTIMIZATION SETTINGS (Tuned for AWS g4dn.xlarge - T4 16GB)
+    MEMORY_GPU_THRESHOLD: float = 0.88  # Cleanup khi GPU usage > 88% (T4 dư sức)
+    MEMORY_CLEANUP_INTERVAL: int = 100  # Cleanup sau mỗi 100 frames (giảm overhead)
+    MEMORY_MAX_FACES_PER_FRAME: int = 50  # Tăng lên 50 (T4 16GB xử lý batch lớn thoải mái)
     MEMORY_MAX_IMAGE_SIZE: int = 1280   # Max dimension cho input image
-    MEMORY_MAX_SPOOF_CROPS: int = 50    # Max spoof crops lưu mỗi session
+    MEMORY_MAX_SPOOF_CROPS: int = 200   # Tăng lên 200 spoof crops mỗi session
     MEMORY_AGGRESSIVE_GC: bool = True   # Bật aggressive garbage collection
     
     # PostgreSQL pgvector connection - BẮT BUỘC qua ENV

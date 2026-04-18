@@ -633,11 +633,15 @@ class FaceRecognizer:
         raise TypeError("Unsupported image type for feature extraction")
 
     def _forward_tensor(self, tensor: Tensor) -> Tensor:
-        with torch.no_grad():
+        # ✅ Phase 1: autocast FP16 - T4 Tensor Cores tự động được kích hoạt
+        device_type = "cuda" if self.device.type == "cuda" else "cpu"
+        ctx = torch.autocast(device_type=device_type, dtype=torch.float16) \
+            if self.device.type == "cuda" else torch.no_grad()
+        with torch.no_grad(), ctx if self.device.type == "cuda" else torch.no_grad():
             output = self.model(tensor)
         if isinstance(output, (list, tuple)):
             output = output[0]
-        return output
+        return output.float()  # Chuyển về FP32 sau inference để KNN distance có độ chính xác cao
 
     # ------------------------------------------------------------------
     # Verification utilities
@@ -874,6 +878,155 @@ class FaceRecognizer:
             "knn_neighbors": neighbors[:k],
         }
         return response
+
+    # ------------------------------------------------------------------
+    # ✅ Phase 2: Batch Inference - N faces → 1 GPU call
+    # ------------------------------------------------------------------
+
+    def extract_features_batch(
+        self,
+        images: List[Union[str, 'os.PathLike[str]', 'Image.Image', np.ndarray]],
+        *,
+        tta: bool = False,
+    ) -> np.ndarray:
+        """
+        Trích xuất embeddings cho một batch hình ảnh trong **1 lần GPU call**.
+
+        Args:
+            images: List các ảnh (path, PIL, numpy). Tất cả cùng được xử lý một lúc.
+            tta   : Bật Test-Time Augmentation (flip ngang).
+
+        Returns:
+            numpy array shape ``(N, 512)`` đã L2-normalized.
+        """
+        if not images:
+            return np.zeros((0, 512), dtype=np.float32)
+
+        # Pre-process tất cả ảnh thành tensor (1,3,H,W) rồi cat lại
+        tensors = [self._prepare_tensor(img) for img in images]  # list of (1,3,112,112)
+        batch = torch.cat(tensors, dim=0)                        # (N,3,112,112)
+
+        feats = self._forward_tensor(batch)  # (N,512)
+
+        if tta:
+            flipped = torch.flip(batch, dims=[3])
+            feats = (feats + self._forward_tensor(flipped)) / 2.0
+
+        normalized = l2_norm(feats, axis=1).detach().cpu().numpy()  # (N,512)
+        return normalized.astype(np.float32)
+
+    def identify_batch(
+        self,
+        images: List[Union[str, 'os.PathLike[str]', 'Image.Image', np.ndarray]],
+        *,
+        threshold: Optional[float] = None,
+        tta: bool = False,
+        gallery_embeddings: Optional[Tensor] = None,
+        gallery_labels: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        """
+        Nhận diện **toàn bộ batch** trong 1 lần GPU forward pass.
+
+        Args:
+            images            : List ảnh khuôn mặt (numpy, PIL, …).
+            threshold         : Ghi đè global threshold.
+            tta               : Test-Time Augmentation.
+            gallery_embeddings: Tensor (M,512) trên GPU (từ session).
+            gallery_labels    : List[str] tương ứng với gallery_embeddings.
+
+        Returns:
+            List[Dict] cùng théo dạng với ``identify()`` — một dict mỗi ảnh.
+        """
+        if not images:
+            return []
+
+        # 1. Lấy gallery
+        if gallery_embeddings is not None and gallery_labels is not None:
+            gallery = gallery_embeddings
+            labels  = gallery_labels
+            use_dynamic = False
+        else:
+            if not self._database:
+                raise RuntimeError("Face database is empty. Call build_database() first.")
+            self._ensure_statistics()
+            gallery = self._gallery_embeddings
+            labels  = self._gallery_labels
+            use_dynamic = self.enable_dynamic_threshold
+
+        if gallery is None or gallery.shape[0] == 0:
+            return [{"person": "Unknown", "confidence": 0.0, "distance": float("inf")} for _ in images]
+
+        global_threshold = float(threshold if threshold is not None else self.threshold)
+
+        # 2. Batch feature extraction — 1 GPU call
+        batch_np = self.extract_features_batch(images, tta=tta)          # (N,512)
+        queries  = torch.from_numpy(batch_np).to(gallery.device, dtype=torch.float32)  # (N,512)
+
+        # 3. Vectorized distance: (N,M)  =  ||q_i - g_j||^2
+        #    Expand: queries (N,1,512) - gallery (1,M,512) → (N,M,512) → sum → (N,M)
+        diff      = queries.unsqueeze(1) - gallery.unsqueeze(0)          # (N,M,512)
+        distances = torch.sum(diff * diff, dim=2)                        # (N,M)
+
+        results: List[Dict] = []
+        distances_cpu = distances.detach().cpu()                         # off GPU
+
+        for i, (query, dist_row) in enumerate(zip(queries, distances_cpu)):
+            k = min(self.knn_k, dist_row.shape[0])
+            topk_distances, topk_indices = torch.topk(dist_row, k=k, largest=False)
+
+            vote_scores: Dict[str, float] = {}
+            nearest_per_identity: Dict[str, float] = {}
+            valid_neighbors_count = 0
+            all_distances: List[float] = []
+            voted_distances: List[float] = []
+
+            for dist, idx in zip(topk_distances.tolist(), topk_indices.tolist()):
+                name = labels[idx]
+                all_distances.append(dist)
+                if dist < self.knn_voting_threshold:
+                    w = 1.0 / (dist + 1e-6)
+                    vote_scores[name] = vote_scores.get(name, 0.0) + w
+                    if name not in nearest_per_identity or dist < nearest_per_identity[name]:
+                        nearest_per_identity[name] = dist
+                    valid_neighbors_count += 1
+                    voted_distances.append(dist)
+
+            if vote_scores:
+                best_name = max(vote_scores, key=lambda n: (vote_scores[n], -nearest_per_identity[n]))
+                best_distance = float(nearest_per_identity[best_name])
+            else:
+                best_name = "Unknown"
+                best_distance = float(dist_row.min().item())
+
+            used_threshold = (
+                self._identity_thresholds.get(best_name, global_threshold)
+                if use_dynamic else global_threshold
+            )
+            vote_total  = sum(vote_scores.values())
+            vote_ratio  = float(vote_scores.get(best_name, 0.0) / vote_total) if vote_total else 0.0
+            confidence  = self._calculate_calibrated_confidence(
+                distance=best_distance,
+                threshold=used_threshold,
+                vote_ratio=vote_ratio,
+                distance_weight=self.confidence_distance_weight,
+                vote_weight=self.confidence_vote_weight,
+            )
+            recognized  = best_name if best_distance < used_threshold else "Unknown"
+
+            results.append({
+                "person"               : recognized,
+                "best_candidate"       : best_name,
+                "distance"             : best_distance,
+                "confidence"           : confidence,
+                "threshold"            : used_threshold,
+                "global_threshold"     : global_threshold,
+                "vote_ratio"           : vote_ratio,
+                "valid_neighbors_count": valid_neighbors_count,
+                "total_neighbors"      : k,
+                "knn_voting_threshold" : float(self.knn_voting_threshold),
+            })
+
+        return results
 
     def _calculate_calibrated_confidence(
         self,

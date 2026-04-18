@@ -170,9 +170,7 @@ class AntiSpoofingClassifier:
     """
     
     # ✅ Class mapping - PHẢI ĐÚNG THỨ TỰ TRAINING
-    # Trong notebook, Pytorch ImageFolder sắp xếp folder theo bảng chữ cái:
-    # 'fake' -> index 0, 'real' -> index 1
-    CLASS_NAMES = ['spoof', 'real']  # 0: spoof (fake), 1: real
+    CLASS_NAMES = ['real', 'spoof']  # 0: real, 1: spoof
     
     def __init__(self, checkpoint_path, device='cuda'):
         """
@@ -207,10 +205,10 @@ class AntiSpoofingClassifier:
         
         self.model.eval()
         
-        # ✅ Transform - PHẢI GIỐNG TRAINING CAO NHẤT CÓ THỂ
-        # Lúc train dùng transforms.Resize((224, 224)), nếu dùng CenterCrop sẽ bị mất rìa ảnh
+        # ✅ Transform - PHẢI GIỐNG TRAINING
         self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])

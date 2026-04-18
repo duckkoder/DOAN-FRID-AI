@@ -253,12 +253,12 @@ class FaceRecognitionService(LoggerMixin):
     ) -> Optional[Dict[str, Any]]:
         """
         Async wrapper cho identify - sử dụng ThreadPoolExecutor
-        
+
         Tránh block event loop khi model inference, cho phép xử lý
         song song nhiều faces trong batch processing.
         """
         from app.services.executor import get_model_executor
-        
+
         executor = get_model_executor()
         return await executor.execute(
             self.identify,
@@ -267,6 +267,84 @@ class FaceRecognitionService(LoggerMixin):
             gallery_embeddings,
             gallery_labels
         )
+
+    def identify_batch(
+        self,
+        face_crops: List[np.ndarray],
+        tta: Optional[bool] = None,
+        gallery_embeddings: Optional[torch.Tensor] = None,
+        gallery_labels: Optional[List[str]] = None,
+    ) -> List[Optional[Dict[str, Any]]]:
+        """
+        ✅ Phase 2: Nhận diện N khuôn mặt trong 1 lần GPU forward pass.
+
+        Args:
+            face_crops        : List các ảnh khuôn mặt (RGB numpy).
+            tta               : Test-Time Augmentation.
+            gallery_embeddings: Tensor (M,512) trên GPU (từ session).
+            gallery_labels    : Danh sách student codes tương ứng.
+
+        Returns:
+            List kết quả (dict) tương tự identify(), theo thứ tự crops.
+        """
+        if not face_crops:
+            return []
+
+        tta_enabled = tta if tta is not None else settings.TTA_ENABLED
+
+        try:
+            raw_results = self.recognizer.identify_batch(
+                face_crops,
+                tta=tta_enabled,
+                gallery_embeddings=gallery_embeddings,
+                gallery_labels=gallery_labels,
+            )
+        except Exception as e:
+            self.logger.error("Batch recognition failed", error=str(e))
+            return [None] * len(face_crops)
+
+        # Áp dụng cùng filtering logic như identify() đơn lẻ
+        final_results: List[Optional[Dict[str, Any]]] = []
+        for identity in raw_results:
+            if not identity:
+                final_results.append(None)
+                continue
+
+            should_accept, reason = self._should_accept_recognition(
+                identity,
+                min_confidence=settings.REC_MIN_CONFIDENCE,
+                min_vote_ratio=settings.REC_MIN_VOTE_RATIO,
+                min_valid_neighbors_ratio=settings.REC_MIN_VALID_NEIGHBORS_RATIO,
+                max_distance_ratio=settings.REC_MAX_DISTANCE_RATIO,
+            )
+            if not should_accept:
+                identity["person"] = "Unknown"
+                identity["rejection_reason"] = reason
+            final_results.append(identity)
+
+        return final_results
+
+    async def identify_batch_async(
+        self,
+        face_crops: List[np.ndarray],
+        tta: Optional[bool] = None,
+        gallery_embeddings: Optional[torch.Tensor] = None,
+        gallery_labels: Optional[List[str]] = None,
+    ) -> List[Optional[Dict[str, Any]]]:
+        """
+        ✅ Async wrapper cho identify_batch — chạy trên face_pool (không block event loop).
+        """
+        from app.services.executor import get_model_executor
+
+        executor = get_model_executor()
+        return await executor.execute(
+            self.identify_batch,
+            face_crops,
+            tta,
+            gallery_embeddings,
+            gallery_labels,
+        )
+
     
     def extract_features(
         self,

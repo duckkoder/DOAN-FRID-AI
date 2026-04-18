@@ -144,83 +144,78 @@ class FaceEngine(LoggerMixin):
         gallery_labels: Optional[List[str]] = None,
     ) -> List[Detection]:
         """
-        Nhận diện faces dựa trên embeddings database - BATCH PROCESSING
-        
+        Nhận diện faces dựa trên embeddings database.
+
+        ✅ Phase 3: True Batch GPU Inference - toàn bộ N faces được gom
+        thành 1 tensor và đẩy qua GPU trong 1 lần duy nhất thay vì N lần.
+
         Args:
             detections: Danh sách detections từ detect_faces
             crops: Danh sách face crops từ detect_faces ✅
             gallery_embeddings: Gallery embeddings tensor (N, 512) on GPU [from session]
             gallery_labels: Gallery labels (student codes) [from session]
-            
+
         Returns:
             Danh sách detections với thông tin recognition
-            
-        Note:
-            Sử dụng asyncio.gather() để xử lý song song tất cả faces,
-            tận dụng ThreadPoolExecutor trong identify_async.
         """
         if self.recognizer is None:
             self.logger.warning("Recognizer not initialized")
             return detections
-        
-        # Check if we have session-based embeddings
+
         use_session_embeddings = gallery_embeddings is not None and gallery_labels is not None
-        
         if not use_session_embeddings:
             self.logger.warning("No session embeddings provided - using internal database (legacy)")
-        
-        # Check if we have crops
+
         if not crops or len(crops) != len(detections):
-            self.logger.warning(f"Crops mismatch: {len(crops) if crops else 0} crops vs {len(detections)} detections")
+            self.logger.warning(
+                f"Crops mismatch: {len(crops) if crops else 0} crops vs {len(detections)} detections"
+            )
             return detections
-        
+
         try:
-            # ✅ BATCH PROCESSING - Tạo tất cả tasks trước
-            tasks = []
-            valid_indices = []
-            
+            # ── Thu thập valid crops và index tương ứng ──────────────────────
+            valid_crops: List[np.ndarray] = []
+            valid_indices: List[int] = []
+
             for i, (detection, crop) in enumerate(zip(detections, crops)):
                 if crop is not None and crop.size > 0:
-                    # Tạo task cho mỗi face (chưa await)
-                    task = self.recognizer.identify_async(
-                        crop,
-                        gallery_embeddings=gallery_embeddings,
-                        gallery_labels=gallery_labels
-                    )
-                    tasks.append(task)
+                    valid_crops.append(crop)
                     valid_indices.append(i)
-            
-            if not tasks:
+
+            if not valid_crops:
                 self.logger.debug("No valid crops to recognize")
                 return detections
-            
-            # ✅ CHẠY TẤT CẢ SONG SONG với asyncio.gather()
-            self.logger.debug(f"Running batch recognition for {len(tasks)} faces")
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # ✅ GÁN KẾT QUẢ VÀO DETECTIONS
+
+            # ✅ Phase 3: 1 GPU call cho toàn bộ batch
+            self.logger.debug(f"Running TRUE BATCH recognition for {len(valid_crops)} faces (1 GPU call)")
+            results = await self.recognizer.identify_batch_async(
+                valid_crops,
+                gallery_embeddings=gallery_embeddings,
+                gallery_labels=gallery_labels,
+            )
+
+            # ── Gán kết quả vào detections ────────────────────────────────────
             for idx, result in zip(valid_indices, results):
-                if isinstance(result, Exception):
-                    self.logger.warning(
-                        "Failed to recognize face",
-                        detection_index=idx,
-                        error=str(result)
-                    )
+                if result is None:
                     continue
-                
-                if result and result.get('person') != 'Unknown':
-                    detections[idx].student_code = result.get('person')
-                    detections[idx].student_name = result.get('person')
-                    detections[idx].recognition_confidence = float(result.get('confidence', 0.0))
-            
+                if isinstance(result, Exception):
+                    self.logger.warning("Failed to recognize face", detection_index=idx, error=str(result))
+                    continue
+
+                if result.get("person") != "Unknown":
+                    detections[idx].student_code = result.get("person")
+                    detections[idx].student_name = result.get("person")
+                    detections[idx].recognition_confidence = float(result.get("confidence", 0.0))
+
             recognized_count = sum(1 for d in detections if d.student_id)
             self.logger.debug(f"Batch recognized {recognized_count}/{len(detections)} faces")
-            
+
             return detections
-            
+
         except Exception as e:
             self.logger.error("Batch face recognition failed", error=str(e))
             return detections
+
     
     async def extract_embeddings(
         self,
