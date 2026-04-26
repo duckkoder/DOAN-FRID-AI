@@ -220,8 +220,8 @@ class RegistrationService(LoggerMixin):
         )
 
 
-# Initialize service
-registration_service = RegistrationService()
+def get_registration_service() -> RegistrationService:
+    return RegistrationService()
 
 
 @router.post(
@@ -231,7 +231,8 @@ registration_service = RegistrationService()
     description="Extract embeddings from student face images for attendance recognition"
 )
 async def register_student_face(
-    request: RegisterFaceRequest
+    request: RegisterFaceRequest,
+    service: RegistrationService = Depends(get_registration_service)
 ):
     """
     Register student face by extracting embeddings from 14 face images.
@@ -258,7 +259,7 @@ async def register_student_face(
     - List of 14 averaged embeddings (512-dim vectors)
     - Processing statistics
     """
-    return registration_service.process_registration(request)
+    return service.process_registration(request)
 
 
 @router.get(

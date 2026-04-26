@@ -35,15 +35,15 @@ class ExecutorManager(LoggerMixin):
         super().__init__()
         cpu_count = os.cpu_count() or 4
 
-        # Real-time AI: 3 thread (GPU là bottleneck thực sự, không phải CPU thread)
+        # Real-time AI: 4 thread (GPU là bottleneck thực sự, không phải CPU thread)
         self._face_executor = ThreadPoolExecutor(
-            max_workers=3,
+            max_workers=4,
             thread_name_prefix="face_worker"
         )
 
-        # RAG / Text Embedding: 2 thread, tránh chiếm hết CPU khi embed tài liệu lớn
+        # RAG / Text Embedding: 1 thread, tránh chiếm hết CPU khi embed tài liệu lớn
         self._rag_executor = ThreadPoolExecutor(
-            max_workers=2,
+            max_workers=1,
             thread_name_prefix="rag_worker"
         )
 
@@ -60,9 +60,9 @@ class ExecutorManager(LoggerMixin):
 
         self.logger.info(
             "ExecutorManager initialized (3-pool)",
-            face_workers=3,
-            rag_workers=2,
-            io_workers=max(2, cpu_count - 2),
+            face_workers=self._face_executor._max_workers,
+            rag_workers=self._rag_executor._max_workers,
+            io_workers=self._io_executor._max_workers,
         )
 
     async def initialize(self) -> None:
