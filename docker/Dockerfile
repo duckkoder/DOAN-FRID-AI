@@ -1,8 +1,10 @@
-# Base image với CUDA support
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+# ============================================================
+# AI Service Dockerfile — CUDA 12.1 + Python 3.11
+# ============================================================
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
-# Cài Python và system dependencies
-RUN apt-get update && apt-get install -y \
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-dev \
     python3-pip \
@@ -19,31 +21,28 @@ RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 \
 
 WORKDIR /app
 
-# Copy và install requirements trước (tận dụng Docker build cache)
+# Install dependencies (cached layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/cu124 \
+    --extra-index-url https://download.pytorch.org/whl/cu121 \
     -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
 COPY models/ ./models/
 
-# Tạo thư mục weights (sẽ chứa file .pth từ host volume)
+# Tạo thư mục weights (mount từ host volume)
 RUN mkdir -p /app/weights
 
-# Create non-root user
+# Non-root user
 RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-# Expose port
 EXPOSE 8096
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8096/api/v1/health || exit 1
 
-# Run application
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8096"]
