@@ -398,6 +398,10 @@ async def stream_frames(
                 if current_time - last_frame_time < 1/30:
                     continue
                 
+                # ✅ FIX: Cập nhật last_frame_time ngay sau khi quyết định xử lý frame
+                # (phải trước mọi continue tiếp theo để tránh skip liên tục)
+                last_frame_time = current_time
+                
                 # Validate frame size (max 2MB)
                 if len(frame_data) > 2 * 1024 * 1024:
                     await websocket.send_json({
@@ -407,7 +411,6 @@ async def stream_frames(
                     continue
                 
                 frame_count += 1
-                last_frame_time = current_time
                 
                 # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
@@ -422,6 +425,33 @@ async def stream_frames(
                     ws_logger.warning(f"[Frame {frame_count}] Too many faces ({len(detections)}), limiting to {MAX_FACES_PER_FRAME}")
                     detections = detections[:MAX_FACES_PER_FRAME]
                     crops = crops[:MAX_FACES_PER_FRAME]
+
+                # Gửi detection-only ngay để UI vẽ đủ box trước.
+                # Anti-spoofing/recognition/validation chạy tiếp và sẽ gửi bản cập nhật đầy đủ sau.
+                early_detections_data = [
+                    {
+                        "bbox": detection.bbox,
+                        "confidence": detection.confidence,
+                        "track_id": detection.track_id,
+                        "student_code": detection.student_code or "Unknown",
+                        "student_name": detection.student_name or "Unknown",
+                        "recognition_confidence": detection.recognition_confidence,
+                        "is_live": detection.is_live,
+                        "spoofing_type": detection.spoofing_type,
+                        "spoofing_confidence": detection.spoofing_confidence
+                    }
+                    for detection in detections
+                ]
+                await websocket.send_json({
+                    "type": "frame_processed",
+                    "processing_stage": "detected",
+                    "frame_count": frame_count,
+                    "detections": early_detections_data,
+                    "total_faces": len(detections),
+                    "real_faces": None,
+                    "spoof_faces": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
                 
                 # ✅ 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
                 real_crops = []  # Only real faces for recognition
@@ -515,6 +545,7 @@ async def stream_frames(
                     
                     await websocket.send_json({
                         "type": "frame_processed",
+                        "processing_stage": "completed",
                         "frame_count": frame_count,
                         "detections": detections_data,
                         "total_faces": len(detections),
@@ -528,6 +559,7 @@ async def stream_frames(
                 if not detections:
                     await websocket.send_json({
                         "type": "frame_processed",
+                        "processing_stage": "completed",
                         "frame_count": frame_count,
                         "detections": [],
                         "total_faces": 0,
@@ -642,6 +674,7 @@ async def stream_frames(
                 
                 await websocket.send_json({
                     "type": "frame_processed",
+                    "processing_stage": "completed",
                     "frame_count": frame_count,
                     "detections": detections_data,
                     "total_faces": len(detections),
@@ -717,7 +750,8 @@ async def stream_frames(
                 
                 # ✅ MEMORY CLEANUP: Giải phóng các objects không cần thiết
                 del detections, crops, original_image, real_crops
-                if 'anti_spoofing_results' in dir():
+                # ✅ FIX: Dùng locals() thay dir() để kiểm tra biến local đúng cách
+                if 'anti_spoofing_results' in locals():
                     del anti_spoofing_results
                 
                 # ✅ MEMORY: Periodic cleanup sau mỗi N frames
