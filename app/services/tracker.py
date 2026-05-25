@@ -37,6 +37,33 @@ class TrackState:
     # Metrics
     total_recognitions: int = 0
     successful_recognitions: int = 0
+
+    # ✅ Anti-spoofing temporal smoothing (rolling vote window)
+    # Lưu N kết quả is_live gần nhất để tránh nhảy fake↔real từng frame
+    spoof_vote_buffer: deque = field(default_factory=lambda: deque(maxlen=5))
+    # Cached smoothed result (chỉ update khi buffer đủ votes)
+    smoothed_is_live: Optional[bool] = None
+
+    def add_spoof_vote(self, is_live: bool) -> bool:
+        """
+        Thêm vote is_live mới, trả về smoothed is_live sau khi vote.
+        Chỉ chuyển trạng thái khi đa số (>= 60%) vote nhất quán.
+        """
+        self.spoof_vote_buffer.append(is_live)
+        votes = list(self.spoof_vote_buffer)
+        live_ratio = sum(votes) / len(votes)
+        # Dùng hysteresis: real cần >= 60%, spoof cần <= 40%
+        if self.smoothed_is_live is None:
+            # Bootstrap: chờ ít nhất 2 votes
+            if len(votes) >= 2:
+                self.smoothed_is_live = live_ratio >= 0.5
+        elif self.smoothed_is_live:  # hiện đang REAL
+            if live_ratio <= 0.40:  # cần >= 60% spoof để chuyển
+                self.smoothed_is_live = False
+        else:  # hiện đang SPOOF
+            if live_ratio >= 0.60:  # cần >= 60% real để chuyển
+                self.smoothed_is_live = True
+        return self.smoothed_is_live if self.smoothed_is_live is not None else is_live
     
     def add_recognition(self, student_code: Optional[str], confidence: float, timestamp: datetime):
         """Thêm một bản ghi nhận diện vào history"""
@@ -102,9 +129,9 @@ class FaceTracker(LoggerMixin):
     
     def __init__(
         self, 
-        max_disappeared: int = 2,  # ✅ Giảm từ 30s → 2s (xóa track cũ nhanh hơn)
+        max_disappeared: int = 5,  # ✅ 5s: đủ để giữ track khi face bị miss vài frame
         distance_threshold: int = 200,
-        iou_threshold: float = 0.15,  # ✅ Giảm từ 0.3 → 0.15 (match rộng hơn cho di chuyển nhanh)
+        iou_threshold: float = 0.15,  # ✅ 0.15: match rộng hơn cho di chuyển nhanh
         use_iou: bool = True
     ):
         """

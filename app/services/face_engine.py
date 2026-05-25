@@ -1,7 +1,6 @@
 """
 Face Engine - Orchestrator cho face detection và recognition services
 """
-import asyncio
 import base64
 import io
 from typing import List, Optional, Dict, Any, Set
@@ -401,7 +400,7 @@ class FaceEngine(LoggerMixin):
             ]
             
         Note:
-            Sử dụng asyncio.gather() để xử lý song song tất cả faces.
+            Gom tất cả crops thành một batch và chạy model một lần.
         """
         if not face_crops:
             return []
@@ -418,47 +417,16 @@ class FaceEngine(LoggerMixin):
             ]
         
         try:
-            # ✅ BATCH PROCESSING - Tạo tất cả tasks
-            tasks = [
-                self.anti_spoofing.is_live_async(crop) 
-                for crop in face_crops
-            ]
-            
-            self.logger.debug(f"Running batch anti-spoofing for {len(tasks)} faces")
-            
-            # ✅ CHẠY TẤT CẢ SONG SONG
-            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # ✅ XỬ LÝ KẾT QUẢ VÀ EXCEPTIONS
-            results = []
-            for i, result in enumerate(raw_results):
-                if isinstance(result, Exception):
-                    self.logger.error(
-                        f"Anti-spoofing failed for crop #{i}",
-                        error=str(result)
+            self.logger.debug(f"Running TRUE BATCH anti-spoofing for {len(face_crops)} faces")
+            results = await self.anti_spoofing.predict_batch_async(face_crops)
+
+            for i, result in enumerate(results):
+                if not result.get('is_live', True):
+                    self.logger.warning(
+                        f"🚨 Spoof face detected in crop #{i}",
+                        label=result.get('label'),
+                        confidence=f"{result.get('confidence', 0.0):.3f}"
                     )
-                    # Fallback: assume real nếu có lỗi (safe default)
-                    results.append({
-                        'is_live': True,
-                        'label': 'unknown',
-                        'confidence': 0.0
-                    })
-                else:
-                    # Unpack tuple (is_live, label, confidence) thành dict
-                    is_live, label, confidence = result
-                    result_dict = {
-                        'is_live': is_live,
-                        'label': label,
-                        'confidence': confidence
-                    }
-                    results.append(result_dict)
-                    # Log chi tiết
-                    if not is_live:
-                        self.logger.warning(
-                            f"🚨 Spoof face detected in crop #{i}",
-                            label=label,
-                            confidence=f"{confidence:.3f}"
-                        )
             
             # Log summary
             total = len(results)

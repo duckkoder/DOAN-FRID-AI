@@ -2,7 +2,7 @@
 Anti-Spoofing Service - Phát hiện tấn công giả mạo (real/spoof)
 Model mới: ResNet18_MSFF_AntiSpoof với 2 classes
 """
-from typing import Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any
 import numpy as np
 from PIL import Image
 
@@ -128,6 +128,55 @@ class AntiSpoofingService(LoggerMixin):
         
         # ✅ Trả về trực tiếp kết quả từ predict() - logic đã được xử lý ở đó
         return result['is_live'], result['label'], result['confidence']
+
+    def predict_batch(self, face_images: List[np.ndarray]) -> List[Dict[str, Any]]:
+        """
+        Dự đoán anti-spoofing cho nhiều face crops bằng một lần model forward.
+        """
+        if not face_images:
+            return []
+
+        results = [
+            {
+                'is_live': False,
+                'label': 'unknown',
+                'confidence': 0.0
+            }
+            for _ in face_images
+        ]
+        valid_images = []
+        valid_indices = []
+
+        for idx, face_image in enumerate(face_images):
+            if face_image is None or face_image.size == 0:
+                self.logger.warning("Empty face image provided", index=idx)
+                continue
+            valid_images.append(face_image)
+            valid_indices.append(idx)
+
+        if not valid_images:
+            return results
+
+        try:
+            predictions = self.classifier.predict_batch(valid_images)
+
+            for idx, (label, confidence) in zip(valid_indices, predictions):
+                results[idx] = {
+                    'is_live': not (label == 'spoof' and confidence >= self.threshold),
+                    'label': label,
+                    'confidence': confidence
+                }
+
+            self.logger.debug(
+                "Anti-spoofing batch prediction completed",
+                batch_size=len(valid_images),
+                threshold=self.threshold
+            )
+            return results
+
+        except Exception as e:
+            self.logger.error("Anti-spoofing batch prediction failed", error=str(e), exc_info=True)
+            return results
     
     async def predict_async(self, face_image: np.ndarray) -> Dict[str, Any]:
         """
@@ -149,6 +198,15 @@ class AntiSpoofingService(LoggerMixin):
         
         executor = get_model_executor()
         return await executor.execute(self.is_live, face_image)
+
+    async def predict_batch_async(self, face_images: List[np.ndarray]) -> List[Dict[str, Any]]:
+        """
+        Async batch anti-spoofing - gom nhiều crop thành một batch inference.
+        """
+        from app.services.executor import get_model_executor
+
+        executor = get_model_executor()
+        return await executor.execute(self.predict_batch, face_images)
 
 
 # ============================================================

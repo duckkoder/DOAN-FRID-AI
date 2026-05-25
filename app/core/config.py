@@ -3,6 +3,7 @@ Cấu hình ứng dụng sử dụng pydantic-settings
 """
 import urllib.parse
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -92,6 +93,11 @@ class Settings(BaseSettings):
     RECOGNITION_WINDOW_SIZE: int
     RECOGNITION_MIN_FRAME_SUCCESS_RATE: float
     RECOGNITION_DEBOUNCE_SECONDS: int = 30
+
+    # Attendance stream throttling/cache settings
+    ATTENDANCE_HEAVY_PROCESS_FACE_THRESHOLD: int = 8
+    ATTENDANCE_HEAVY_PROCESS_INTERVAL: int = 3
+    ATTENDANCE_RECOGNITION_CACHE_TTL_FRAMES: int = 8
     
     # ✅ MEMORY OPTIMIZATION SETTINGS (Tuned for AWS g4dn.xlarge - T4 16GB)
     MEMORY_GPU_THRESHOLD: float = 0.88  # Cleanup khi GPU usage > 88% (T4 dư sức)
@@ -110,6 +116,13 @@ class Settings(BaseSettings):
     
     # Cho phép ghi đè trực tiếp nguyên cả URL nếu muốn
     DATABASE_URL_OVERRIDE: Optional[str] = None
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, value):
+        if isinstance(value, str) and value.lower() in {"release", "production", "prod"}:
+            return False
+        return value
     
     @property
     def DATABASE_URL(self) -> str:

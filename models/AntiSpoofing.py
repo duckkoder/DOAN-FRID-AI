@@ -252,3 +252,44 @@ class AntiSpoofingClassifier:
         confidence_score = confidence.item()
         
         return label, confidence_score
+
+    def predict_batch(self, images):
+        """
+        Predict anti-spoofing labels for multiple face crops in one model forward.
+
+        Args:
+            images: list of PIL.Image, numpy.ndarray, or file paths
+
+        Returns:
+            list[tuple[str, float]]: (label, confidence) for each image
+        """
+        if not images:
+            return []
+
+        tensors = []
+        for image in images:
+            if isinstance(image, str):
+                img = Image.open(image).convert('RGB')
+            elif isinstance(image, Image.Image):
+                img = image.convert('RGB')
+            elif isinstance(image, np.ndarray):
+                if image.ndim == 3 and image.shape[2] == 3:
+                    img = Image.fromarray(image).convert('RGB')
+                else:
+                    raise ValueError(f"Invalid image shape: {image.shape}")
+            else:
+                raise TypeError(f"Unsupported image type: {type(image)}")
+
+            tensors.append(self.transform(img))
+
+        batch = torch.stack(tensors, dim=0).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(batch)
+            probs = torch.softmax(outputs, dim=1)
+            confidences, pred_indices = torch.max(probs, 1)
+
+        return [
+            (self.CLASS_NAMES[pred_idx.item()], confidence.item())
+            for pred_idx, confidence in zip(pred_indices, confidences)
+        ]

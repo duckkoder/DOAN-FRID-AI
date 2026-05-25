@@ -423,35 +423,70 @@ async def stream_frames(
                 # ✅ MEMORY: Giới hạn số faces xử lý mỗi frame
                 if len(detections) > MAX_FACES_PER_FRAME:
                     ws_logger.warning(f"[Frame {frame_count}] Too many faces ({len(detections)}), limiting to {MAX_FACES_PER_FRAME}")
-                    detections = detections[:MAX_FACES_PER_FRAME]
-                    crops = crops[:MAX_FACES_PER_FRAME]
+                    paired = sorted(
+                        zip(detections, crops),
+                        key=lambda item: item[0].confidence,
+                        reverse=True
+                    )[:MAX_FACES_PER_FRAME]
+                    detections = [item[0] for item in paired]
+                    crops = [item[1] for item in paired]
 
-                # Gửi detection-only ngay để UI vẽ đủ box trước.
-                # Anti-spoofing/recognition/validation chạy tiếp và sẽ gửi bản cập nhật đầy đủ sau.
-                early_detections_data = [
-                    {
-                        "bbox": detection.bbox,
-                        "confidence": detection.confidence,
-                        "track_id": detection.track_id,
-                        "student_code": detection.student_code or "Unknown",
-                        "student_name": detection.student_name or "Unknown",
-                        "recognition_confidence": detection.recognition_confidence,
-                        "is_live": detection.is_live,
-                        "spoofing_type": detection.spoofing_type,
-                        "spoofing_confidence": detection.spoofing_confidence
-                    }
-                    for detection in detections
-                ]
-                await websocket.send_json({
-                    "type": "frame_processed",
-                    "processing_stage": "detected",
-                    "frame_count": frame_count,
-                    "detections": early_detections_data,
-                    "total_faces": len(detections),
-                    "real_faces": None,
-                    "spoof_faces": None,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
+                # ✅ NOTE: Không gửi early 'detected' frame để tránh gửi 2 message
+                # liên tiếp (detected + completed) gây nhấp nháy UI.
+                # Chỉ gửi 1 message duy nhất 'completed' sau khi xử lý xong.
+
+                if not detections:
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "processing_stage": "completed",
+                        "heavy_processed": False,
+                        "frame_count": frame_count,
+                        "detections": [],
+                        "total_faces": 0,
+                        "real_faces": 0,
+                        "spoof_faces": 0,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    await session_manager.increment_frame_count(session_id)
+                    cleanup_result = memory_manager.periodic_cleanup()
+                    if cleanup_result.get('cleaned'):
+                        ws_logger.debug(
+                            f"[Frame {frame_count}] Memory cleanup performed",
+                            gc_collected=cleanup_result.get('gc_collected', 0),
+                            cuda_freed_mb=cleanup_result.get('cuda_freed_mb', 0)
+                        )
+                    del detections, crops, original_image
+                    continue
+
+                heavy_face_threshold = app_settings.ATTENDANCE_HEAVY_PROCESS_FACE_THRESHOLD
+                heavy_interval = max(1, app_settings.ATTENDANCE_HEAVY_PROCESS_INTERVAL)
+                should_run_heavy = (
+                    len(detections) <= heavy_face_threshold
+                    or ((frame_count - 1) % heavy_interval == 0)
+                )
+
+                if not should_run_heavy:
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "processing_stage": "completed",
+                        "heavy_processed": False,
+                        "frame_count": frame_count,
+                        "detections": early_detections_data,
+                        "total_faces": len(detections),
+                        "real_faces": None,
+                        "spoof_faces": None,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    await session_manager.increment_frame_count(session_id)
+                    cleanup_result = memory_manager.periodic_cleanup()
+                    if cleanup_result.get('cleaned'):
+                        ws_logger.debug(
+                            f"[Frame {frame_count}] Memory cleanup performed",
+                            gc_collected=cleanup_result.get('gc_collected', 0),
+                            cuda_freed_mb=cleanup_result.get('cuda_freed_mb', 0)
+                        )
+                    del detections, crops, original_image
+                    continue
                 
                 # ✅ 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
                 real_crops = []  # Only real faces for recognition
@@ -462,35 +497,43 @@ async def stream_frames(
                     # Check anti-spoofing cho từng face crop
                     anti_spoofing_results = await engine.check_anti_spoofing(crops)
                     
-                    # Update ALL detections với anti-spoofing info
+                    # Update ALL detections với anti-spoofing info + temporal smoothing
                     for idx, (detection, crop, spoof_result) in enumerate(zip(detections, crops, anti_spoofing_results)):
-                        # ✅ Update detection với anti-spoofing info (cho TẤT CẢ faces)
-                        detection.is_live = spoof_result['is_live']  # True if real, False if spoof
-                        detection.spoofing_type = spoof_result['label']  # 'real' hoặc 'spoof'
+                        raw_is_live = spoof_result['is_live']
+
+                        # ✅ Áp dụng temporal smoothing qua track vote buffer
+                        # Nếu face chưa có track_id, fallback về raw prediction
+                        smoothed_live = raw_is_live
+                        if session.face_tracker and detection.track_id is not None:
+                            track_state = await session.face_tracker.get_track_info(detection.track_id)
+                            if track_state is not None:
+                                smoothed_live = track_state.add_spoof_vote(raw_is_live)
+
+                        # Update detection với smoothed result
+                        detection.is_live = smoothed_live
+                        detection.spoofing_type = spoof_result['label']
                         detection.spoofing_confidence = spoof_result['confidence']
-                        
-                        if spoof_result['is_live']:
+
+                        if smoothed_live:
                             # ✅ Real face - giữ crop cho recognition
                             real_crops.append(crop)
                             real_count += 1
                             ws_logger.info(
-                                f"[Frame {frame_count}] ✅ REAL/LIVE face #{idx}",
+                                f"[Frame {frame_count}] ✅ REAL/LIVE face #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
                                 bbox=detection.bbox,
                                 label=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.1%}",
-                                is_live=spoof_result['is_live']
                             )
                         else:
                             # 🚨 Spoof face - KHÔNG loại bỏ, CHỈ đánh dấu
                             spoof_count += 1
                             ws_logger.warning(
-                                f"[Frame {frame_count}] 🚨 SPOOF CONFIRMED #{idx} - WILL BE SAVED",
+                                f"[Frame {frame_count}] 🚨 SPOOF CONFIRMED #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
                                 bbox=detection.bbox,
                                 label=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.1%}",
-                                is_live=spoof_result['is_live']
                             )
-                            
+
                             # ✅ Lưu spoof face crop vào session memory (để upload S3 khi end_session)
                             await session_manager.store_spoof_face_crop(
                                 session_id=session_id,
@@ -533,6 +576,7 @@ async def stream_frames(
                             "bbox": detection.bbox,
                             "confidence": detection.confidence,
                             "track_id": None,  # Không track spoof faces
+                            "student_id": "Unknown",
                             "student_code": "Unknown",  # ✅ Thay null thành "Unknown"
                             "student_name": "Unknown",  # ✅ Thay null thành "Unknown"
                             "recognition_confidence": None,
@@ -662,6 +706,7 @@ async def stream_frames(
                         "bbox": detection.bbox,
                         "confidence": detection.confidence,
                         "track_id": detection.track_id,
+                        "student_id": detection.student_code or "Unknown",
                         "student_code": detection.student_code or "Unknown",  # ✅ Thay null thành "Unknown"
                         "student_name": detection.student_name or "Unknown",  # ✅ Thay null thành "Unknown"
                         "recognition_confidence": detection.recognition_confidence,
