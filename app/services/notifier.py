@@ -1,5 +1,5 @@
-"""
-Notifier Service - Gửi callback về backend với HMAC signature
+﻿"""
+Notifier Service - Gá»­i callback vá» backend vá»›i HMAC signature
 """
 import asyncio
 import hmac
@@ -23,7 +23,7 @@ class NotificationError(Exception):
 
 class BackendNotifier(LoggerMixin):
     """
-    Service gửi callback về backend
+    Service gá»­i callback vá» backend
     TODO: Implement retry logic, circuit breaker, dead letter queue
     """
     
@@ -53,15 +53,15 @@ class BackendNotifier(LoggerMixin):
         session_id: str
     ) -> bool:
         """
-        Gửi cập nhật điểm danh về backend
+        Gá»­i cáº­p nháº­t Ä‘iá»ƒm danh vá» backend
         
         Args:
-            callback_url: URL callback của backend
-            attendance_data: Dữ liệu điểm danh
-            session_id: ID session để logging
+            callback_url: URL callback cá»§a backend
+            attendance_data: Dá»¯ liá»‡u Ä‘iá»ƒm danh
+            session_id: ID session Ä‘á»ƒ logging
             
         Returns:
-            True nếu gửi thành công, False nếu thất bại
+            True náº¿u gá»­i thÃ nh cÃ´ng, False náº¿u tháº¥t báº¡i
         """
         logger = self.get_contextual_logger(session_id=session_id)
         
@@ -100,7 +100,7 @@ class BackendNotifier(LoggerMixin):
             
             logger.debug("Generated HMAC signature", signature_preview=signature[:16])
             
-            # Send POST request to backend webhook với signature header
+            # Send POST request to backend webhook vá»›i signature header
             response = await self.client.post(
                 callback_url,
                 json=payload,
@@ -139,7 +139,7 @@ class BackendNotifier(LoggerMixin):
         session_id: str
     ) -> bool:
         """
-        Gửi attendance update với retry logic
+        Gá»­i attendance update vá»›i retry logic
         
         TODO: Implement exponential backoff, jitter
         """
@@ -174,17 +174,3 @@ class BackendNotifier(LoggerMixin):
         
         logger.error("All retry attempts failed")
         return False
-    
-    async def health_check(self, callback_url: str) -> bool:
-        """
-        Kiểm tra health của backend callback endpoint
-        
-        TODO: Implement thật
-        """
-        # Stub: Always return healthy
-        self.logger.debug("Backend health check (STUB)", callback_url=callback_url)
-        return True
-
-
-# Global notifier instance
-backend_notifier = BackendNotifier()

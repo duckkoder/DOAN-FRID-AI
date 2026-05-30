@@ -1,18 +1,15 @@
-"""
+﻿"""
 Frame processing endpoints with WebSocket support
 """
-import base64
 import gc
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, Set
 
 from fastapi import APIRouter, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 
-from app.models.schemas import FrameRequest, FrameResponse, AttendanceUpdate
+from app.models.schemas import AttendanceUpdate
 from app.services.session_manager import session_manager
 from app.services.face_engine import get_face_engine
-from app.services.notifier import backend_notifier
 from app.core.logging import get_logger
 from app.core.memory_manager import get_memory_manager
 
@@ -37,186 +34,6 @@ def get_engine():
     return face_engine
 
 
-@router.post("/sessions/{session_id}/frames", response_model=FrameResponse)
-async def process_frame(
-    session_id: str,
-    request: FrameRequest
-):
-    """
-    Xử lý frame ảnh
-    
-    Note: This endpoint is for testing/development. Production uses WebSocket with JWT auth.
-    
-    Args:
-        session_id: ID của session
-        request: Frame data và metadata
-        
-    Returns:
-        Kết quả xử lý frame
-        
-    Raises:
-        HTTPException: Nếu session không tồn tại hoặc có lỗi xử lý
-    """
-    request_logger = logger.bind(
-        session_id=session_id,
-        client_seq=request.client_seq
-    )
-    
-    try:
-        # Kiểm tra session tồn tại và lấy SessionData thực (với embeddings)
-        session = await session_manager.get_session_data(session_id)
-        if not session:
-            request_logger.warning("Session not found")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found"
-            )
-        
-        if session.status != "active":
-            request_logger.warning("Session not active", status=session.status)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Session is not active: {session.status}"
-            )
-        
-        request_logger.info("Processing frame")
-        
-        # Decode frame data (optional - có thể bỏ qua trong stub)
-        frame_data = None
-        if request.frame_base64:
-            try:
-                frame_data = base64.b64decode(request.frame_base64)
-                request_logger.debug("Frame decoded", frame_size=len(frame_data))
-            except Exception as e:
-                request_logger.warning("Failed to decode frame", error=str(e))
-                # Tiếp tục xử lý với frame_data = None
-        
-        current_time = datetime.now(timezone.utc)
-        
-        # Face detection
-        detections = await face_engine.detect_faces(frame_data)
-        request_logger.debug("Face detection completed", num_faces=len(detections))
-        
-        # Face recognition - Use session embeddings from VRAM
-        # session.gallery_embeddings: torch.Tensor shape (N, 512) on GPU
-        # session.gallery_labels: List[str] student codes
-        detections = await face_engine.recognize_faces(
-            detections, 
-            frame_data,
-            gallery_embeddings=session.gallery_embeddings,
-            gallery_labels=session.gallery_labels
-        )
-        
-        # ✅ Face tracking - Sử dụng per-session tracker
-        if session.face_tracker:
-            detections = await session.face_tracker.update(detections)
-        else:
-            request_logger.warning("No face_tracker in session, skipping tracking")
-        
-        # ✅ **CƠ CHẾ MỚI: Cập nhật recognition history vào per-session validator**
-        if session.recognition_validator:
-            for detection in detections:
-                if detection.track_id and detection.student_id:
-                    await session.recognition_validator.add_recognition(
-                        track_id=detection.track_id,
-                        student_code=detection.student_id,  # Using student_code
-                        confidence=detection.recognition_confidence or detection.confidence,
-                        timestamp=current_time
-                    )
-        
-        # ✅ **CƠ CHẾ MỚI: Chỉ lấy sinh viên đã được VALIDATED**
-        validated_student_ids: Set[str] = set()
-        if session.recognition_validator:
-            for detection in detections:
-                if detection.track_id:
-                    validation_result = await session.recognition_validator.validate_recognition(
-                        track_id=detection.track_id,
-                        current_time=current_time
-                    )
-                    if validation_result:
-                        validated_student_ids.add(validation_result["student_code"])  # Changed from student_id
-        
-        # Tăng frame counter
-        await session_manager.increment_frame_count(session_id)
-        
-        # Chuẩn bị response
-        # recognized_student_ids: tất cả sinh viên được nhận diện trong frame này
-        recognized_student_ids = [
-            d.student_id for d in detections 
-            if d.student_id is not None
-        ]
-        
-        response = FrameResponse(
-            session_id=session_id,
-            timestamp=request.timestamp,
-            client_seq=request.client_seq,
-            processed_at=current_time,
-            detections=detections,
-            recognized_student_ids=recognized_student_ids,
-            total_faces=len(detections),
-            callback_sent=False
-        )
-        
-        # **CƠ CHẾ MỚI: Chỉ gửi callback cho sinh viên đã được VALIDATED**
-        # Không còn tin ngay vào kết quả nhận diện đầu tiên
-        if validated_student_ids:
-            from app.models.schemas import ValidatedStudent
-            
-            # Create ValidatedStudent objects (HTTP endpoint doesn't have tracking, use defaults)
-            validated_students_data = [
-                ValidatedStudent(
-                    student_code=student_id,
-                    student_name=student_id,  # HTTP endpoint doesn't have student names
-                    track_id=0,  # No tracking in HTTP endpoint
-                    avg_confidence=0.0,  # No multi-frame stats
-                    frame_count=1,  # Single frame
-                    recognition_count=1,  # Single recognition
-                    validation_passed_at=request.timestamp
-                )
-                for student_id in validated_student_ids
-            ]
-            
-            attendance_data = AttendanceUpdate(
-                session_id=session_id,
-                validated_students=validated_students_data,
-                timestamp=request.timestamp
-            )
-            
-            # Gửi callback async (không chờ kết quả)
-            callback_success = await _send_callback_async(
-                session.backend_callback_url,
-                attendance_data,
-                session_id,
-                request_logger
-            )
-            response.callback_sent = callback_success
-            
-            request_logger.info(
-                "Validated students confirmed",
-                validated_students=list(validated_student_ids),
-                validation_passed=True
-            )
-        
-        request_logger.info(
-            "Frame processed successfully",
-            total_faces=len(detections),
-            recognized_students=len(recognized_student_ids),
-            validated_students=len(validated_student_ids),
-            callback_sent=response.callback_sent
-        )
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        request_logger.error("Frame processing failed", error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Frame processing failed: {str(e)}"
-        )
-
-
 async def _send_callback_async(
     callback_url: str,
     attendance_data: AttendanceUpdate,
@@ -224,10 +41,10 @@ async def _send_callback_async(
     request_logger
 ) -> bool:
     """
-    Gửi callback async với error handling
+    Gá»­i callback async vá»›i error handling
     """
     try:
-        # ✅ Create new notifier instance with context manager
+        # âœ… Create new notifier instance with context manager
         from app.services.notifier import BackendNotifier
         
         async with BackendNotifier() as notifier:
@@ -256,10 +73,10 @@ async def stream_frames(
     token: str = Query(..., description="JWT token for authentication")
 ):
     """
-    WebSocket endpoint để nhận frames từ client.
+    WebSocket endpoint Ä‘á»ƒ nháº­n frames tá»« client.
     
     **Authentication:**
-    - JWT token từ Backend
+    - JWT token tá»« Backend
     - Token type = "websocket"
     - Contains: user_id, session_id (backend), role
     
@@ -324,7 +141,7 @@ async def stream_frames(
     
     try:
         # 1. Verify JWT token
-        ws_logger.info("WebSocket connection attempt")
+        ws_logger.debug("WebSocket connection attempt")
         
         try:
             token_payload = verify_websocket_token(token)
@@ -374,7 +191,7 @@ async def stream_frames(
         # Get face engine
         engine = get_engine()
         
-        # ✅ MEMORY OPTIMIZATION: Get memory manager and settings
+        # âœ… MEMORY OPTIMIZATION: Get memory manager and settings
         from app.core.config import settings as app_settings
         memory_manager = get_memory_manager()
         memory_manager.reset_frame_counter()
@@ -382,9 +199,9 @@ async def stream_frames(
         # Rate limiting variables
         frame_count = 0
         last_frame_time = time.time()
-        validated_students_sent = set()  # Track đã gửi để tránh duplicate
+        validated_students_sent = set()  # Track Ä‘Ã£ gá»­i Ä‘á»ƒ trÃ¡nh duplicate
         
-        # ✅ MEMORY: Max faces per frame từ config
+        # âœ… MEMORY: Max faces per frame tá»« config
         MAX_FACES_PER_FRAME = app_settings.MEMORY_MAX_FACES_PER_FRAME
         
         # 5. Process frames
@@ -398,8 +215,8 @@ async def stream_frames(
                 if current_time - last_frame_time < 1/30:
                     continue
                 
-                # ✅ FIX: Cập nhật last_frame_time ngay sau khi quyết định xử lý frame
-                # (phải trước mọi continue tiếp theo để tránh skip liên tục)
+                # âœ… FIX: Cáº­p nháº­t last_frame_time ngay sau khi quyáº¿t Ä‘á»‹nh xá»­ lÃ½ frame
+                # (pháº£i trÆ°á»›c má»i continue tiáº¿p theo Ä‘á»ƒ trÃ¡nh skip liÃªn tá»¥c)
                 last_frame_time = current_time
                 
                 # Validate frame size (max 2MB)
@@ -415,12 +232,12 @@ async def stream_frames(
                 # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
                 
-                # ✅ MEMORY: Giải phóng frame_data ngay sau khi detect
+                # âœ… MEMORY: Giáº£i phÃ³ng frame_data ngay sau khi detect
                 del frame_data
                 
-                ws_logger.info(f"[Frame {frame_count}] Detected {len(detections)} faces")
+                ws_logger.debug(f"[Frame {frame_count}] Detected {len(detections)} faces")
                 
-                # ✅ MEMORY: Giới hạn số faces xử lý mỗi frame
+                # âœ… MEMORY: Giá»›i háº¡n sá»‘ faces xá»­ lÃ½ má»—i frame
                 if len(detections) > MAX_FACES_PER_FRAME:
                     ws_logger.warning(f"[Frame {frame_count}] Too many faces ({len(detections)}), limiting to {MAX_FACES_PER_FRAME}")
                     paired = sorted(
@@ -431,9 +248,9 @@ async def stream_frames(
                     detections = [item[0] for item in paired]
                     crops = [item[1] for item in paired]
 
-                # ✅ NOTE: Không gửi early 'detected' frame để tránh gửi 2 message
-                # liên tiếp (detected + completed) gây nhấp nháy UI.
-                # Chỉ gửi 1 message duy nhất 'completed' sau khi xử lý xong.
+                # âœ… NOTE: KhÃ´ng gá»­i early 'detected' frame Ä‘á»ƒ trÃ¡nh gá»­i 2 message
+                # liÃªn tiáº¿p (detected + completed) gÃ¢y nháº¥p nhÃ¡y UI.
+                # Chá»‰ gá»­i 1 message duy nháº¥t 'completed' sau khi xá»­ lÃ½ xong.
 
                 if not detections:
                     await websocket.send_json({
@@ -466,6 +283,21 @@ async def stream_frames(
                 )
 
                 if not should_run_heavy:
+                    early_detections_data = [
+                        {
+                            "bbox": detection.bbox,
+                            "confidence": detection.confidence,
+                            "track_id": detection.track_id,
+                            "student_id": "Unknown",
+                            "student_code": "Unknown",
+                            "student_name": "Unknown",
+                            "recognition_confidence": None,
+                            "is_live": None,
+                            "spoofing_type": None,
+                            "spoofing_confidence": None,
+                        }
+                        for detection in detections
+                    ]
                     await websocket.send_json({
                         "type": "frame_processed",
                         "processing_stage": "completed",
@@ -488,53 +320,53 @@ async def stream_frames(
                     del detections, crops, original_image
                     continue
                 
-                # ✅ 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
+                # âœ… 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
                 real_crops = []  # Only real faces for recognition
                 spoof_count = 0
                 real_count = 0
                 
                 if detections and crops:
-                    # Check anti-spoofing cho từng face crop
+                    # Check anti-spoofing cho tá»«ng face crop
                     anti_spoofing_results = await engine.check_anti_spoofing(crops)
                     
-                    # Update ALL detections với anti-spoofing info + temporal smoothing
+                    # Update ALL detections vá»›i anti-spoofing info + temporal smoothing
                     for idx, (detection, crop, spoof_result) in enumerate(zip(detections, crops, anti_spoofing_results)):
                         raw_is_live = spoof_result['is_live']
 
-                        # ✅ Áp dụng temporal smoothing qua track vote buffer
-                        # Nếu face chưa có track_id, fallback về raw prediction
+                        # âœ… Ãp dá»¥ng temporal smoothing qua track vote buffer
+                        # Náº¿u face chÆ°a cÃ³ track_id, fallback vá» raw prediction
                         smoothed_live = raw_is_live
                         if session.face_tracker and detection.track_id is not None:
                             track_state = await session.face_tracker.get_track_info(detection.track_id)
                             if track_state is not None:
                                 smoothed_live = track_state.add_spoof_vote(raw_is_live)
 
-                        # Update detection với smoothed result
+                        # Update detection vá»›i smoothed result
                         detection.is_live = smoothed_live
                         detection.spoofing_type = spoof_result['label']
                         detection.spoofing_confidence = spoof_result['confidence']
 
                         if smoothed_live:
-                            # ✅ Real face - giữ crop cho recognition
+                            # âœ… Real face - giá»¯ crop cho recognition
                             real_crops.append(crop)
                             real_count += 1
-                            ws_logger.info(
-                                f"[Frame {frame_count}] ✅ REAL/LIVE face #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
+                            ws_logger.debug(
+                                f"[Frame {frame_count}] âœ… REAL/LIVE face #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
                                 bbox=detection.bbox,
                                 label=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.1%}",
                             )
                         else:
-                            # 🚨 Spoof face - KHÔNG loại bỏ, CHỈ đánh dấu
+                            # ðŸš¨ Spoof face - KHÃ”NG loáº¡i bá», CHá»ˆ Ä‘Ã¡nh dáº¥u
                             spoof_count += 1
                             ws_logger.warning(
-                                f"[Frame {frame_count}] 🚨 SPOOF CONFIRMED #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
+                                f"[Frame {frame_count}] ðŸš¨ SPOOF CONFIRMED #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
                                 bbox=detection.bbox,
                                 label=spoof_result['label'],
                                 confidence=f"{spoof_result['confidence']:.1%}",
                             )
 
-                            # ✅ Lưu spoof face crop vào session memory (để upload S3 khi end_session)
+                            # âœ… LÆ°u spoof face crop vÃ o session memory (Ä‘á»ƒ upload S3 khi end_session)
                             await session_manager.store_spoof_face_crop(
                                 session_id=session_id,
                                 face_crop=crop,
@@ -544,14 +376,14 @@ async def stream_frames(
                             )
                     
                     # Log summary
-                    ws_logger.info(
+                    ws_logger.debug(
                         f"[Frame {frame_count}] Anti-spoofing summary",
                         total_faces=len(detections),
                         real_faces=real_count,
                         spoof_faces=spoof_count
                     )
                     
-                    # ⚠️ Gửi alert nếu phát hiện spoof faces
+                    # âš ï¸ Gá»­i alert náº¿u phÃ¡t hiá»‡n spoof faces
                     if spoof_count > 0:
                         await websocket.send_json({
                             "type": "anti_spoofing_alert",
@@ -559,15 +391,15 @@ async def stream_frames(
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "total_spoof": spoof_count,
                             "total_real": real_count,
-                            "message": f"⚠️ Detected {spoof_count} spoof face(s) - They will be displayed in RED but not processed for recognition"
+                            "message": f"âš ï¸ Detected {spoof_count} spoof face(s) - They will be displayed in RED but not processed for recognition"
                         })
                 
-                # ✅ KEEP detections (bao gồm cả spoof faces để frontend hiển thị)
-                # crops được thay bằng real_crops (CHỈ real faces cho recognition)
+                # âœ… KEEP detections (bao gá»“m cáº£ spoof faces Ä‘á»ƒ frontend hiá»ƒn thá»‹)
+                # crops Ä‘Æ°á»£c thay báº±ng real_crops (CHá»ˆ real faces cho recognition)
                 
-                # Nếu không có real faces sau filter - VẪN GỬI spoof faces về để hiển thị
+                # Náº¿u khÃ´ng cÃ³ real faces sau filter - VáºªN Gá»¬I spoof faces vá» Ä‘á»ƒ hiá»ƒn thá»‹
                 if real_count == 0 and spoof_count > 0:
-                    # Chỉ có spoof faces - gửi về nhưng không làm gì thêm
+                    # Chá»‰ cÃ³ spoof faces - gá»­i vá» nhÆ°ng khÃ´ng lÃ m gÃ¬ thÃªm
                     ws_logger.warning(f"[Frame {frame_count}] Only spoof faces detected - sending to frontend for display")
                     
                     detections_data = []
@@ -575,12 +407,12 @@ async def stream_frames(
                         det_dict = {
                             "bbox": detection.bbox,
                             "confidence": detection.confidence,
-                            "track_id": None,  # Không track spoof faces
+                            "track_id": None,  # KhÃ´ng track spoof faces
                             "student_id": "Unknown",
-                            "student_code": "Unknown",  # ✅ Thay null thành "Unknown"
-                            "student_name": "Unknown",  # ✅ Thay null thành "Unknown"
+                            "student_code": "Unknown",  # âœ… Thay null thÃ nh "Unknown"
+                            "student_name": "Unknown",  # âœ… Thay null thÃ nh "Unknown"
                             "recognition_confidence": None,
-                            # ✅ Anti-spoofing fields
+                            # âœ… Anti-spoofing fields
                             "is_live": detection.is_live,
                             "spoofing_type": detection.spoofing_type,
                             "spoofing_confidence": detection.spoofing_confidence
@@ -599,7 +431,7 @@ async def stream_frames(
                     })
                     continue
                 
-                # Nếu không có faces nào (cả real lẫn spoof)
+                # Náº¿u khÃ´ng cÃ³ faces nÃ o (cáº£ real láº«n spoof)
                 if not detections:
                     await websocket.send_json({
                         "type": "frame_processed",
@@ -613,14 +445,14 @@ async def stream_frames(
                     })
                     continue
                 
-                # 7. Recognize faces - CHỈ với REAL face crops
-                # ⚠️ CHÚ Ý: detections vẫn chứa TẤT CẢ faces (real + spoof)
-                # Nhưng chỉ real_crops được dùng cho recognition
+                # 7. Recognize faces - CHá»ˆ vá»›i REAL face crops
+                # âš ï¸ CHÃš Ã: detections váº«n chá»©a Táº¤T Cáº¢ faces (real + spoof)
+                # NhÆ°ng chá»‰ real_crops Ä‘Æ°á»£c dÃ¹ng cho recognition
                 if real_count > 0:
-                    # Tạo mapping: index của real faces trong detections
+                    # Táº¡o mapping: index cá»§a real faces trong detections
                     real_indices = [i for i, d in enumerate(detections) if d.is_live]
                     
-                    # Recognize CHỈ real faces
+                    # Recognize CHá»ˆ real faces
                     recognized_detections = await engine.recognize_faces(
                         detections=[detections[i] for i in real_indices],
                         crops=real_crops,
@@ -628,36 +460,36 @@ async def stream_frames(
                         gallery_labels=session.gallery_labels
                     )
                     
-                    # Update lại vào detections gốc (chỉ real faces)
+                    # Update láº¡i vÃ o detections gá»‘c (chá»‰ real faces)
                     for i, idx in enumerate(real_indices):
                         detections[idx] = recognized_detections[i]
                     
-                    ws_logger.info(f"[Frame {frame_count}] Recognized {len([d for d in recognized_detections if d.student_code])} students")
+                    ws_logger.debug(f"[Frame {frame_count}] Recognized {len([d for d in recognized_detections if d.student_code])} students")
                 else:
-                    ws_logger.info(f"[Frame {frame_count}] No real faces to recognize")
+                    ws_logger.debug(f"[Frame {frame_count}] No real faces to recognize")
                 
-                # 8. ✅ Track faces - CHỈ track REAL faces
+                # 8. âœ… Track faces - CHá»ˆ track REAL faces
                 if session.face_tracker and real_count > 0:
-                    # Track chỉ real faces
+                    # Track chá»‰ real faces
                     real_detections_for_tracking = [d for d in detections if d.is_live]
                     tracked_detections = await session.face_tracker.update(real_detections_for_tracking)
                     
-                    # Update track_id vào detections gốc
+                    # Update track_id vÃ o detections gá»‘c
                     tracked_idx = 0
                     for i, d in enumerate(detections):
                         if d.is_live:
                             detections[i] = tracked_detections[tracked_idx]
                             tracked_idx += 1
                     
-                    ws_logger.info(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in tracked_detections]}")
+                    ws_logger.debug(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in tracked_detections]}")
                 elif not session.face_tracker:
                     ws_logger.warning("No face_tracker in session")
                 
-                # 9. ✅ Update recognition history vào per-session validator - CHỈ REAL faces
+                # 9. âœ… Update recognition history vÃ o per-session validator - CHá»ˆ REAL faces
                 current_timestamp = datetime.now(timezone.utc)
                 if session.recognition_validator:
                     for detection in detections:
-                        # ⚠️ CHỈ update recognition history cho REAL faces
+                        # âš ï¸ CHá»ˆ update recognition history cho REAL faces
                         if detection.is_live and detection.track_id and detection.student_id:
                             await session.recognition_validator.add_recognition(
                                 track_id=detection.track_id,
@@ -666,11 +498,11 @@ async def stream_frames(
                                 timestamp=current_timestamp
                             )
                 
-                # 10. ✅ Get validated students từ per-session validator - CHỈ REAL faces
+                # 10. âœ… Get validated students tá»« per-session validator - CHá»ˆ REAL faces
                 validated_student_ids = set()
                 
                 if session.recognition_validator:
-                    # Tạo mapping detection index -> real_crop index
+                    # Táº¡o mapping detection index -> real_crop index
                     detection_to_crop_idx = {}
                     real_idx = 0
                     for i, det in enumerate(detections):
@@ -679,7 +511,7 @@ async def stream_frames(
                             real_idx += 1
                     
                     for i, detection in enumerate(detections):
-                        # ⚠️ CHỈ validate REAL faces
+                        # âš ï¸ CHá»ˆ validate REAL faces
                         if detection.is_live and detection.track_id:
                             validation_result = await session.recognition_validator.validate_recognition(
                                 track_id=detection.track_id,
@@ -689,7 +521,7 @@ async def stream_frames(
                                 student_code = validation_result["student_code"]
                                 validated_student_ids.add(student_code)
                                 
-                                # ✅ Lưu face crop vào session memory (để lấy sau khi end_session)
+                                # âœ… LÆ°u face crop vÃ o session memory (Ä‘á»ƒ láº¥y sau khi end_session)
                                 if i in detection_to_crop_idx:
                                     crop_idx = detection_to_crop_idx[i]
                                     if crop_idx < len(real_crops):
@@ -699,7 +531,7 @@ async def stream_frames(
                                             face_crop=real_crops[crop_idx]
                                         )
                 
-                # 11. ✅ Send response với TẤT CẢ detections (bao gồm cả spoof faces)
+                # 11. âœ… Send response vá»›i Táº¤T Cáº¢ detections (bao gá»“m cáº£ spoof faces)
                 detections_data = []
                 for detection in detections:
                     det_dict = {
@@ -707,10 +539,10 @@ async def stream_frames(
                         "confidence": detection.confidence,
                         "track_id": detection.track_id,
                         "student_id": detection.student_code or "Unknown",
-                        "student_code": detection.student_code or "Unknown",  # ✅ Thay null thành "Unknown"
-                        "student_name": detection.student_name or "Unknown",  # ✅ Thay null thành "Unknown"
+                        "student_code": detection.student_code or "Unknown",  # âœ… Thay null thÃ nh "Unknown"
+                        "student_name": detection.student_name or "Unknown",  # âœ… Thay null thÃ nh "Unknown"
                         "recognition_confidence": detection.recognition_confidence,
-                        # ✅ Anti-spoofing fields
+                        # âœ… Anti-spoofing fields
                         "is_live": detection.is_live,
                         "spoofing_type": detection.spoofing_type,
                         "spoofing_confidence": detection.spoofing_confidence
@@ -739,17 +571,17 @@ async def stream_frames(
                     
                     for student_id in newly_validated:
                         # Find detection with this student_id to get track_id and student_name
-                        # ⚠️ CHỈ tìm trong REAL faces (is_live = True)
+                        # âš ï¸ CHá»ˆ tÃ¬m trong REAL faces (is_live = True)
                         detection_with_student = next((d for d in detections if d.student_id == student_id and d.is_live), None)
                         
                         if detection_with_student and detection_with_student.track_id and session.face_tracker:
-                            # ✅ Get track state and stats từ per-session tracker
+                            # âœ… Get track state and stats tá»« per-session tracker
                             track_state = await session.face_tracker.get_track_info(detection_with_student.track_id)
                             
                             if track_state:
                                 stats = track_state.get_recognition_stats(window_size=5)
                                 
-                                # ✅ KHÔNG encode base64 nữa, ảnh đã lưu trong session memory
+                                # âœ… KHÃ”NG encode base64 ná»¯a, áº£nh Ä‘Ã£ lÆ°u trong session memory
                                 validated_student = ValidatedStudent(
                                     student_code=student_id,
                                     student_name=getattr(detection_with_student, 'student_name', student_id),
@@ -793,13 +625,13 @@ async def stream_frames(
                 # 14. Increment frame counter
                 await session_manager.increment_frame_count(session_id)
                 
-                # ✅ MEMORY CLEANUP: Giải phóng các objects không cần thiết
+                # âœ… MEMORY CLEANUP: Giáº£i phÃ³ng cÃ¡c objects khÃ´ng cáº§n thiáº¿t
                 del detections, crops, original_image, real_crops
-                # ✅ FIX: Dùng locals() thay dir() để kiểm tra biến local đúng cách
+                # âœ… FIX: DÃ¹ng locals() thay dir() Ä‘á»ƒ kiá»ƒm tra biáº¿n local Ä‘Ãºng cÃ¡ch
                 if 'anti_spoofing_results' in locals():
                     del anti_spoofing_results
                 
-                # ✅ MEMORY: Periodic cleanup sau mỗi N frames
+                # âœ… MEMORY: Periodic cleanup sau má»—i N frames
                 cleanup_result = memory_manager.periodic_cleanup()
                 if cleanup_result.get('cleaned'):
                     ws_logger.debug(
@@ -822,7 +654,7 @@ async def stream_frames(
                 
             except WebSocketDisconnect:
                 ws_logger.info("WebSocket disconnected by client")
-                # ✅ MEMORY: Cleanup khi disconnect
+                # âœ… MEMORY: Cleanup khi disconnect
                 memory_manager.force_cleanup()
                 break
             except Exception as e:
@@ -831,12 +663,12 @@ async def stream_frames(
                     "type": "error",
                     "message": f"Processing error: {str(e)}"
                 })
-                # ✅ MEMORY: Cleanup khi có lỗi
+                # âœ… MEMORY: Cleanup khi cÃ³ lá»—i
                 memory_manager.cleanup_python_gc()
     
     except Exception as e:
         ws_logger.error("WebSocket error", error=str(e))
-        # ✅ MEMORY: Final cleanup
+        # âœ… MEMORY: Final cleanup
         memory_manager.force_cleanup()
         try:
             await websocket.close(code=1011, reason=f"Internal error: {str(e)}")

@@ -9,7 +9,6 @@ import numpy as np
 from PIL import Image
 import io
 
-from app.models.schemas import ErrorResponse
 from app.services.face_recognition_service import FaceRecognitionService
 from app.services.embedding_manager import EmbeddingManager
 from app.core.logging import LoggerMixin

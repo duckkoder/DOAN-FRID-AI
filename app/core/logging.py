@@ -39,6 +39,17 @@ def configure_logging():
         level=getattr(logging, settings.LOG_LEVEL.upper())
     )
 
+    for noisy_logger in (
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "sentence_transformers",
+        "transformers",
+        "huggingface_hub",
+        "uvicorn.access",
+    ):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
 
 def get_logger(name: str, **context) -> structlog.stdlib.BoundLogger:
     """

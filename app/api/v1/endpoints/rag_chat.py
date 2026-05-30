@@ -1,8 +1,8 @@
 """
 RAG Chat Endpoint.
 
-Backend is responsible for user authentication and document authorization before
-proxying requests here. AI service only retrieves, embeds, and streams answers.
+Backend is responsible for user authentication, tenant API key lookup, document
+authorization, retrieval, and history before proxying requests here.
 """
 from __future__ import annotations
 
@@ -23,8 +23,10 @@ class ChatRequest(BaseModel):
     class_id: int
     question: str
     document_ids: List[str]
+    context_chunks: List[dict] = []
     creativity_mode: Literal["strict", "expanded"] = "strict"
     detail_level: Literal["brief", "normal", "detailed"] = "normal"
+    gemini_api_key: str
 
 
 @router.post(
@@ -40,6 +42,8 @@ async def rag_chat(body: ChatRequest):
         raise HTTPException(status_code=422, detail="question cannot be empty")
     if not body.document_ids:
         raise HTTPException(status_code=422, detail="document_ids cannot be empty")
+    if not body.gemini_api_key.strip():
+        raise HTTPException(status_code=422, detail="gemini_api_key is required")
 
     async def _event_generator():
         async for chunk in stream_answer(
@@ -49,6 +53,8 @@ async def rag_chat(body: ChatRequest):
             document_ids=body.document_ids,
             creativity_mode=body.creativity_mode,
             detail_level=body.detail_level,
+            gemini_api_key=body.gemini_api_key,
+            context_chunks=body.context_chunks,
         ):
             yield chunk
 

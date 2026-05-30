@@ -1,23 +1,23 @@
+﻿"""
+Cáº¥u hÃ¬nh á»©ng dá»¥ng sá»­ dá»¥ng pydantic-settings
 """
-Cấu hình ứng dụng sử dụng pydantic-settings
-"""
-import urllib.parse
 from typing import Optional
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    """Cấu hình chính của ứng dụng"""
+    """Cáº¥u hÃ¬nh chÃ­nh cá»§a á»©ng dá»¥ng"""
     
     # App settings
     APP_NAME: str = "AI-Service"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    ACCESS_LOG: bool = False
     ENVIRONMENT: str = "development"  # development, staging, production
     
-    # Backend Integration - BẮT BUỘC phải set qua ENV, không có default
+    # Backend Integration - Báº®T BUá»˜C pháº£i set qua ENV, khÃ´ng cÃ³ default
     BACKEND_JWT_SECRET: str  # Must match Backend SECRET_KEY
     BACKEND_CALLBACK_SECRET: str  # Must match Backend AI_SERVICE_SECRET
     
@@ -32,19 +32,10 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8069
     
-    # Gemini API (RAG)
-    GEMINI_API_KEY: str # Set via ENV: GEMINI_API_KEY
-
     # RAG embedding model (default: vietnamese-bi-encoder)
     RAG_BI_ENCODER_MODEL: str = "bkai-foundation-models/vietnamese-bi-encoder"
 
-    # AWS S3 (for downloading PDFs during RAG ingestion)
-    AWS_ACCESS_KEY_ID: str = ""
-    AWS_SECRET_ACCESS_KEY: str = ""
-    AWS_REGION: str = "ap-southeast-1"
-    S3_MODEL_BUCKET: str = ""
-
-    # Model Paths - Quan trọng cho AWS
+    # Model Paths - Quan trá»ng cho AWS
     EMBEDDING_DIR: str = ""
     DETECTOR_CHECKPOINT: Optional[str] = None
     RECOGNIZER_CHECKPOINT: Optional[str] = None
@@ -99,41 +90,20 @@ class Settings(BaseSettings):
     ATTENDANCE_HEAVY_PROCESS_INTERVAL: int = 3
     ATTENDANCE_RECOGNITION_CACHE_TTL_FRAMES: int = 8
     
-    # ✅ MEMORY OPTIMIZATION SETTINGS (Tuned for AWS g4dn.xlarge - T4 16GB)
-    MEMORY_GPU_THRESHOLD: float = 0.88  # Cleanup khi GPU usage > 88% (T4 dư sức)
-    MEMORY_CLEANUP_INTERVAL: int = 100  # Cleanup sau mỗi 100 frames (giảm overhead)
-    MEMORY_MAX_FACES_PER_FRAME: int = 50  # Tăng lên 50 (T4 16GB xử lý batch lớn thoải mái)
+    # âœ… MEMORY OPTIMIZATION SETTINGS (Tuned for AWS g4dn.xlarge - T4 16GB)
+    MEMORY_GPU_THRESHOLD: float = 0.88  # Cleanup khi GPU usage > 88% (T4 dÆ° sá»©c)
+    MEMORY_CLEANUP_INTERVAL: int = 100  # Cleanup sau má»—i 100 frames (giáº£m overhead)
+    MEMORY_MAX_FACES_PER_FRAME: int = 50  # TÄƒng lÃªn 50 (T4 16GB xá»­ lÃ½ batch lá»›n thoáº£i mÃ¡i)
     MEMORY_MAX_IMAGE_SIZE: int = 1280   # Max dimension cho input image
-    MEMORY_MAX_SPOOF_CROPS: int = 200   # Tăng lên 200 spoof crops mỗi session
-    MEMORY_AGGRESSIVE_GC: bool = True   # Bật aggressive garbage collection
+    MEMORY_MAX_SPOOF_CROPS: int = 200   # TÄƒng lÃªn 200 spoof crops má»—i session
+    MEMORY_AGGRESSIVE_GC: bool = True   # Báº­t aggressive garbage collection
     
-    # PostgreSQL pgvector connection - BẮT BUỘC qua ENV
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "ai_attendance"
-    POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str  # BẮT BUỘC - set qua ENV, không có default
-    
-    # Cho phép ghi đè trực tiếp nguyên cả URL nếu muốn
-    DATABASE_URL_OVERRIDE: Optional[str] = None
-
     @field_validator("DEBUG", mode="before")
     @classmethod
     def parse_debug(cls, value):
         if isinstance(value, str) and value.lower() in {"release", "production", "prod"}:
             return False
         return value
-    
-    @property
-    def DATABASE_URL(self) -> str:
-        """Get PostgreSQL connection URL."""
-        if self.DATABASE_URL_OVERRIDE:
-            return self.DATABASE_URL_OVERRIDE
-        
-        # Mã hóa mật khẩu để xử lý ký tự đặc biệt (ví dụ dấu @)
-        safe_password = urllib.parse.quote_plus(self.POSTGRES_PASSWORD)
-        return f"postgresql://{self.POSTGRES_USER}:{safe_password}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-    
     
     class Config:
         env_file = ".env"

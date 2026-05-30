@@ -1,5 +1,5 @@
-"""
-Session Manager - Quản lý sessions in-memory
+﻿"""
+Session Manager - Quáº£n lÃ½ sessions in-memory
 """
 import asyncio
 import uuid
@@ -12,19 +12,18 @@ import cv2
 
 from app.models.schemas import SessionCreateRequest, SessionResponse
 from app.core.logging import LoggerMixin
-from app.services.database_service import get_database_service
 
 
 @dataclass
 class SpoofFaceCrop:
     """
-    Dữ liệu một ảnh spoof face - LƯU DẠNG NÉN ĐỂ TIẾT KIỆM MEMORY
+    Dá»¯ liá»‡u má»™t áº£nh spoof face - LÆ¯U Dáº NG NÃ‰N Äá»‚ TIáº¾T KIá»†M MEMORY
     """
-    face_crop_jpeg: bytes  # ✅ JPEG bytes thay vì numpy array để tiết kiệm RAM
+    face_crop_jpeg: bytes  # âœ… JPEG bytes thay vÃ¬ numpy array Ä‘á»ƒ tiáº¿t kiá»‡m RAM
     spoofing_type: str  # 'spoof', 'print', 'replay', etc.
-    spoofing_confidence: float  # Độ tin cậy của prediction
-    detected_at: datetime  # Thời điểm phát hiện
-    frame_count: int  # Frame số mấy phát hiện
+    spoofing_confidence: float  # Äá»™ tin cáº­y cá»§a prediction
+    detected_at: datetime  # Thá»i Ä‘iá»ƒm phÃ¡t hiá»‡n
+    frame_count: int  # Frame sá»‘ máº¥y phÃ¡t hiá»‡n
     
     def get_face_crop(self) -> np.ndarray:
         """Decompress JPEG bytes back to RGB numpy array"""
@@ -36,9 +35,9 @@ class SpoofFaceCrop:
 @dataclass
 class ValidatedStudentCrop:
     """
-    Dữ liệu face crop của student đã validated - LƯU DẠNG NÉN
+    Dá»¯ liá»‡u face crop cá»§a student Ä‘Ã£ validated - LÆ¯U Dáº NG NÃ‰N
     """
-    face_crop_jpeg: bytes  # ✅ JPEG bytes thay vì numpy array
+    face_crop_jpeg: bytes  # âœ… JPEG bytes thay vÃ¬ numpy array
     
     def get_face_crop(self) -> np.ndarray:
         """Decompress JPEG bytes back to RGB numpy array"""
@@ -57,19 +56,19 @@ def _compress_face_crop(face_crop: np.ndarray, quality: int = 85) -> bytes:
 
 @dataclass
 class SessionData:
-    """Dữ liệu session lưu trong memory với embeddings loaded vào VRAM"""
+    """Dá»¯ liá»‡u session lÆ°u trong memory vá»›i embeddings loaded vÃ o VRAM"""
     session_id: str
-    backend_session_id: int  # Backend session ID để mapping
+    backend_session_id: int  # Backend session ID Ä‘á»ƒ mapping
     class_id: str
     backend_callback_url: str
     status: str
     created_at: datetime
-    allowed_users: List[str] = field(default_factory=list)  # RBAC: user_ids được phép
+    allowed_users: List[str] = field(default_factory=list)  # RBAC: user_ids Ä‘Æ°á»£c phÃ©p
     embeddings_loaded: bool = False
     total_frames_processed: int = 0
     max_duration_minutes: int = 60
     
-    # Embeddings data loaded vào VRAM (GPU memory)
+    # Embeddings data loaded vÃ o VRAM (GPU memory)
     gallery_embeddings: Optional[torch.Tensor] = None  # Shape: (N, 512) - N embeddings
     gallery_labels: Optional[List[str]] = None  # List of student_codes
     gallery_student_ids: Optional[List[int]] = None  # List of student_ids
@@ -80,15 +79,15 @@ class SessionData:
     face_tracker: Optional[Any] = None  # FaceTracker instance
     recognition_validator: Optional[Any] = None  # RecognitionValidator instance
     
-    # ✅ Storage for validated students with face crops (for end_session upload) - COMPRESSED
+    # âœ… Storage for validated students with face crops (for end_session upload) - COMPRESSED
     validated_students_crops: Dict[str, ValidatedStudentCrop] = field(default_factory=dict)
     
-    # ✅ Storage for spoof faces detected during session (for evidence upload) - COMPRESSED
+    # âœ… Storage for spoof faces detected during session (for evidence upload) - COMPRESSED
     spoof_faces_crops: List[SpoofFaceCrop] = field(default_factory=list)
 
 
 class SessionManager(LoggerMixin):
-    """Quản lý sessions in-memory với thread safety"""
+    """Quáº£n lÃ½ sessions in-memory vá»›i thread safety"""
     
     def __init__(self):
         super().__init__()
@@ -97,16 +96,16 @@ class SessionManager(LoggerMixin):
     
     async def create_session(self, request: SessionCreateRequest) -> SessionResponse:
         """
-        Tạo session mới và load embeddings vào VRAM.
+        Táº¡o session má»›i vÃ  load embeddings vÃ o VRAM.
         
-        BƯỚC 1: Query embeddings từ pgvector (1 lần DUY NHẤT)
-        BƯỚC 2: Load embeddings vào VRAM (GPU memory)
+        Step 1: Receive embeddings from Backend tenant DB
+        Step 2: Load embeddings into VRAM (GPU memory)
         
         Args:
-            request: Thông tin tạo session với student_codes
+            request: ThÃ´ng tin táº¡o session vá»›i student_codes
             
         Returns:
-            Thông tin session đã tạo
+            ThÃ´ng tin session Ä‘Ã£ táº¡o
         """
         session_id = str(uuid.uuid4())
         
@@ -125,16 +124,18 @@ class SessionManager(LoggerMixin):
             
             self._sessions[session_id] = session_data
             
-            # BƯỚC 1: Query embeddings từ database (1 query duy nhất)
+            #         Step 1: Receive embeddings from Backend tenant DB
             try:
-                embeddings_data = await self._load_embeddings_from_database(request.student_codes)
+                embeddings_data = request.face_embeddings
+                if not embeddings_data:
+                    raise ValueError("face_embeddings is required")
                 
-                # BƯỚC 2: Load vào VRAM
+                # BÆ¯á»šC 2: Load vÃ o VRAM
                 await self._load_embeddings_to_vram(session_data, embeddings_data)
                 
                 session_data.embeddings_loaded = True
                 
-                # BƯỚC 3: ✅ Tạo per-session Tracker và Validator
+                # BÆ¯á»šC 3: âœ… Táº¡o per-session Tracker vÃ  Validator
                 await self._initialize_session_tracker_and_validator(session_data)
                 
                 self.logger.info(
@@ -157,44 +158,14 @@ class SessionManager(LoggerMixin):
             
             return self._session_data_to_response(session_data)
     
-    async def _load_embeddings_from_database(self, student_codes: List[str]) -> List[Dict[str, Any]]:
-        """
-        BƯỚC 1: Query embeddings từ pgvector (1 lần DUY NHẤT).
-        
-        Args:
-            student_codes: List of student codes
-        
-        Returns:
-            List of embedding dictionaries
-        """
-        self.logger.info("Loading embeddings from database", student_count=len(student_codes))
-        
-        # Run sync database query in thread pool
-        loop = asyncio.get_event_loop()
-        db_service = get_database_service()
-        
-        embeddings_data = await loop.run_in_executor(
-            None,
-            db_service.get_embeddings_by_student_codes,
-            student_codes,
-            "approved"
-        )
-        
-        self.logger.info(
-            "Embeddings loaded from database",
-            embedding_count=len(embeddings_data)
-        )
-        
-        return embeddings_data
-    
     async def _load_embeddings_to_vram(
         self,
         session_data: SessionData,
         embeddings_data: List[Dict[str, Any]]
     ) -> None:
         """
-        BƯỚC 2: Load embeddings vào VRAM (GPU memory).
-        Gộp 500 vectors thành 1 tensor và lưu vào SessionData.
+                Step 2: Load embeddings into VRAM (GPU memory)
+        Gá»™p 500 vectors thÃ nh 1 tensor vÃ  lÆ°u vÃ o SessionData.
         
         Args:
             session_data: Session data to update
@@ -230,7 +201,7 @@ class SessionManager(LoggerMixin):
         # Convert to torch tensor
         embeddings_tensor = torch.from_numpy(embeddings_array).float()
         
-        # ⚠️ CRITICAL: L2 normalization - MUST normalize before comparison
+        # âš ï¸ CRITICAL: L2 normalization - MUST normalize before comparison
         # Face embeddings MUST be normalized for distance calculation to work correctly
         embeddings_tensor = torch.nn.functional.normalize(embeddings_tensor, p=2, dim=1)
         
@@ -260,11 +231,11 @@ class SessionManager(LoggerMixin):
         session_data: SessionData
     ) -> None:
         """
-        BƯỚC 3: Khởi tạo per-session Tracker và Validator
+        BÆ¯á»šC 3: Khá»Ÿi táº¡o per-session Tracker vÃ  Validator
         
-        Mỗi session có:
-        - FaceTracker riêng (không chia sẻ tracks giữa sessions)
-        - RecognitionValidator riêng (không chia sẻ history/debounce)
+        Má»—i session cÃ³:
+        - FaceTracker riÃªng (khÃ´ng chia sáº» tracks giá»¯a sessions)
+        - RecognitionValidator riÃªng (khÃ´ng chia sáº» history/debounce)
         
         Args:
             session_data: Session data to initialize
@@ -274,15 +245,15 @@ class SessionManager(LoggerMixin):
         from app.core.config import settings
         
         try:
-            # Tạo FaceTracker per-session với IoU enabled
+            # Táº¡o FaceTracker per-session vá»›i IoU enabled
             face_tracker = create_face_tracker(
                 max_disappeared=30,
                 distance_threshold=200,
                 iou_threshold=0.3,
-                use_iou=True  # ✅ Sử dụng IoU thay vì distance
+                use_iou=True  # âœ… Sá»­ dá»¥ng IoU thay vÃ¬ distance
             )
             
-            # Tạo RecognitionValidator per-session với auto-adjust FPS
+            # Táº¡o RecognitionValidator per-session vá»›i auto-adjust FPS
             recognition_validator = create_recognition_validator(
                 face_tracker=face_tracker,
                 confirmation_threshold=getattr(settings, 'RECOGNITION_CONFIRMATION_THRESHOLD', 3),
@@ -290,11 +261,11 @@ class SessionManager(LoggerMixin):
                 min_avg_confidence=getattr(settings, 'RECOGNITION_MIN_AVG_CONFIDENCE', 0.5),
                 min_success_rate=getattr(settings, 'RECOGNITION_MIN_FRAME_SUCCESS_RATE', 0.6),
                 debounce_seconds=getattr(settings, 'RECOGNITION_DEBOUNCE_SECONDS', 30),
-                auto_adjust_to_fps=True,  # ✅ Tự động điều chỉnh theo FPS
+                auto_adjust_to_fps=True,  # âœ… Tá»± Ä‘á»™ng Ä‘iá»u chá»‰nh theo FPS
                 target_fps=5.0
             )
             
-            # Lưu vào session data
+            # LÆ°u vÃ o session data
             session_data.face_tracker = face_tracker
             session_data.recognition_validator = recognition_validator
             
@@ -315,20 +286,20 @@ class SessionManager(LoggerMixin):
     
     async def get_session(self, session_id: str) -> Optional[SessionResponse]:
         """
-        Lấy thông tin session (DTO)
+        Láº¥y thÃ´ng tin session (DTO)
         
         Args:
-            session_id: ID của session
+            session_id: ID cá»§a session
             
         Returns:
-            Thông tin session hoặc None nếu không tồn tại
+            ThÃ´ng tin session hoáº·c None náº¿u khÃ´ng tá»“n táº¡i
         """
         async with self._lock:
             session_data = self._sessions.get(session_id)
             if not session_data:
                 return None
             
-            # Kiểm tra session có hết hạn không
+            # Kiá»ƒm tra session cÃ³ háº¿t háº¡n khÃ´ng
             if self._is_session_expired(session_data):
                 session_data.status = "expired"
             
@@ -336,20 +307,20 @@ class SessionManager(LoggerMixin):
     
     async def get_session_data(self, session_id: str) -> Optional[SessionData]:
         """
-        Lấy SessionData thực (với embeddings) - for internal use
+        Láº¥y SessionData thá»±c (vá»›i embeddings) - for internal use
         
         Args:
-            session_id: ID của session
+            session_id: ID cá»§a session
             
         Returns:
-            SessionData object hoặc None nếu không tồn tại
+            SessionData object hoáº·c None náº¿u khÃ´ng tá»“n táº¡i
         """
         async with self._lock:
             session_data = self._sessions.get(session_id)
             if not session_data:
                 return None
             
-            # Kiểm tra session có hết hạn không
+            # Kiá»ƒm tra session cÃ³ háº¿t háº¡n khÃ´ng
             if self._is_session_expired(session_data):
                 session_data.status = "expired"
             
@@ -357,13 +328,13 @@ class SessionManager(LoggerMixin):
     
     async def delete_session(self, session_id: str) -> bool:
         """
-        Xóa session
+        XÃ³a session
         
         Args:
-            session_id: ID của session
+            session_id: ID cá»§a session
             
         Returns:
-            True nếu xóa thành công, False nếu không tồn tại
+            True náº¿u xÃ³a thÃ nh cÃ´ng, False náº¿u khÃ´ng tá»“n táº¡i
         """
         async with self._lock:
             session_data = self._sessions.get(session_id)
@@ -384,13 +355,13 @@ class SessionManager(LoggerMixin):
     
     async def increment_frame_count(self, session_id: str) -> bool:
         """
-        Tăng số lượng frame đã xử lý
+        TÄƒng sá»‘ lÆ°á»£ng frame Ä‘Ã£ xá»­ lÃ½
         
         Args:
-            session_id: ID của session
+            session_id: ID cá»§a session
             
         Returns:
-            True nếu thành công, False nếu session không tồn tại
+            True náº¿u thÃ nh cÃ´ng, False náº¿u session khÃ´ng tá»“n táº¡i
         """
         async with self._lock:
             session_data = self._sessions.get(session_id)
@@ -415,7 +386,7 @@ class SessionManager(LoggerMixin):
             return self._sessions.get(session_id)
     
     async def get_active_sessions_count(self) -> int:
-        """Lấy số lượng session đang hoạt động"""
+        """Láº¥y sá»‘ lÆ°á»£ng session Ä‘ang hoáº¡t Ä‘á»™ng"""
         async with self._lock:
             active_count = 0
             for session_data in self._sessions.values():
@@ -425,10 +396,10 @@ class SessionManager(LoggerMixin):
     
     async def cleanup_expired_sessions(self) -> int:
         """
-        Dọn dẹp các session đã hết hạn
+        Dá»n dáº¹p cÃ¡c session Ä‘Ã£ háº¿t háº¡n
         
         Returns:
-            Số lượng session đã được dọn dẹp
+            Sá»‘ lÆ°á»£ng session Ä‘Ã£ Ä‘Æ°á»£c dá»n dáº¹p
         """
         async with self._lock:
             expired_sessions = []
@@ -450,18 +421,18 @@ class SessionManager(LoggerMixin):
         face_crop: np.ndarray
     ) -> bool:
         """
-        Lưu face crop của student đã validated vào session memory.
-        Sẽ được lấy ra khi end_session để upload S3.
+        LÆ°u face crop cá»§a student Ä‘Ã£ validated vÃ o session memory.
+        Sáº½ Ä‘Æ°á»£c láº¥y ra khi end_session Ä‘á»ƒ upload S3.
         
-        ✅ MEMORY OPTIMIZATION: Lưu dạng JPEG compressed
+        âœ… MEMORY OPTIMIZATION: LÆ°u dáº¡ng JPEG compressed
         
         Args:
-            session_id: ID của session
-            student_code: Mã sinh viên
-            face_crop: Ảnh khuôn mặt crop (numpy array RGB)
+            session_id: ID cá»§a session
+            student_code: MÃ£ sinh viÃªn
+            face_crop: áº¢nh khuÃ´n máº·t crop (numpy array RGB)
             
         Returns:
-            True nếu lưu thành công
+            True náº¿u lÆ°u thÃ nh cÃ´ng
         """
         async with self._lock:
             session = self._sessions.get(session_id)
@@ -469,10 +440,10 @@ class SessionManager(LoggerMixin):
                 self.logger.warning(f"Session not found: {session_id}")
                 return False
             
-            # ✅ MEMORY: Compress to JPEG bytes (~ 10-20x smaller)
+            # âœ… MEMORY: Compress to JPEG bytes (~ 10-20x smaller)
             jpeg_bytes = _compress_face_crop(face_crop, quality=85)
             
-            # Lưu compressed crop (overwrite nếu đã có)
+            # LÆ°u compressed crop (overwrite náº¿u Ä‘Ã£ cÃ³)
             session.validated_students_crops[student_code] = ValidatedStudentCrop(
                 face_crop_jpeg=jpeg_bytes
             )
@@ -489,10 +460,10 @@ class SessionManager(LoggerMixin):
     
     async def get_validated_students_crops(self, session_id: str) -> Dict[str, np.ndarray]:
         """
-        Lấy tất cả face crops của students đã validated trong session.
+        Láº¥y táº¥t cáº£ face crops cá»§a students Ä‘Ã£ validated trong session.
         
         Args:
-            session_id: ID của session
+            session_id: ID cá»§a session
             
         Returns:
             Dict mapping student_code -> face_crop (numpy array RGB)
@@ -503,7 +474,7 @@ class SessionManager(LoggerMixin):
                 self.logger.warning(f"Session not found: {session_id}")
                 return {}
             
-            # ✅ Decompress when retrieving
+            # âœ… Decompress when retrieving
             result = {}
             for student_code, crop_data in session.validated_students_crops.items():
                 result[student_code] = crop_data.get_face_crop()
@@ -519,27 +490,27 @@ class SessionManager(LoggerMixin):
         frame_count: int
     ) -> bool:
         """
-        Lưu spoof face crop vào session memory để upload lên S3 khi end_session.
+        LÆ°u spoof face crop vÃ o session memory Ä‘á»ƒ upload lÃªn S3 khi end_session.
         
-        ⚠️ QUALITY FILTER để tránh spam:
-        - Phải cách ít nhất 15 frame so với ảnh trước đó
-        - ✅ MEMORY: Giới hạn tối đa 50 ảnh spoof mỗi session
-        - ✅ MEMORY: Lưu dạng JPEG compressed
+        âš ï¸ QUALITY FILTER Ä‘á»ƒ trÃ¡nh spam:
+        - Pháº£i cÃ¡ch Ã­t nháº¥t 15 frame so vá»›i áº£nh trÆ°á»›c Ä‘Ã³
+        - âœ… MEMORY: Giá»›i háº¡n tá»‘i Ä‘a 50 áº£nh spoof má»—i session
+        - âœ… MEMORY: LÆ°u dáº¡ng JPEG compressed
         
         Args:
-            session_id: ID của session
-            face_crop: Ảnh khuôn mặt crop (numpy array RGB)
-            spoofing_type: Loại giả mạo ('spoof', 'print', 'replay', etc.)
-            spoofing_confidence: Độ tin cậy của prediction
-            frame_count: Frame số mấy phát hiện
+            session_id: ID cá»§a session
+            face_crop: áº¢nh khuÃ´n máº·t crop (numpy array RGB)
+            spoofing_type: Loáº¡i giáº£ máº¡o ('spoof', 'print', 'replay', etc.)
+            spoofing_confidence: Äá»™ tin cáº­y cá»§a prediction
+            frame_count: Frame sá»‘ máº¥y phÃ¡t hiá»‡n
             
         Returns:
-            True nếu lưu thành công, False nếu bị skip
+            True náº¿u lÆ°u thÃ nh cÃ´ng, False náº¿u bá»‹ skip
         """
         from app.core.config import settings
         
-        MIN_FRAME_GAP = 15     # Phải cách ít nhất 15 frame
-        MAX_SPOOF_CROPS = settings.MEMORY_MAX_SPOOF_CROPS  # ✅ Từ config
+        MIN_FRAME_GAP = 15     # Pháº£i cÃ¡ch Ã­t nháº¥t 15 frame
+        MAX_SPOOF_CROPS = settings.MEMORY_MAX_SPOOF_CROPS  # âœ… Tá»« config
         
         async with self._lock:
             session = self._sessions.get(session_id)
@@ -547,7 +518,7 @@ class SessionManager(LoggerMixin):
                 self.logger.warning(f"Session not found: {session_id}")
                 return False
             
-            # ⚠️ QUALITY CHECK: Chưa đủ khoảng cách frame?
+            # âš ï¸ QUALITY CHECK: ChÆ°a Ä‘á»§ khoáº£ng cÃ¡ch frame?
             if session.spoof_faces_crops:
                 last_frame = session.spoof_faces_crops[-1].frame_count
                 if frame_count - last_frame < MIN_FRAME_GAP:
@@ -558,7 +529,7 @@ class SessionManager(LoggerMixin):
                     )
                     return False
             
-            # ✅ MEMORY: Giới hạn tối đa số ảnh spoof lưu trữ
+            # âœ… MEMORY: Giá»›i háº¡n tá»‘i Ä‘a sá»‘ áº£nh spoof lÆ°u trá»¯
             if len(session.spoof_faces_crops) >= MAX_SPOOF_CROPS:
                 self.logger.warning(
                     f"Max spoof crops reached ({MAX_SPOOF_CROPS}), skipping",
@@ -567,10 +538,10 @@ class SessionManager(LoggerMixin):
                 )
                 return False
             
-            # ✅ MEMORY: Compress to JPEG bytes
+            # âœ… MEMORY: Compress to JPEG bytes
             jpeg_bytes = _compress_face_crop(face_crop, quality=80)  # Lower quality for spoofs
             
-            # Tạo SpoofFaceCrop object với compressed data
+            # Táº¡o SpoofFaceCrop object vá»›i compressed data
             spoof_data = SpoofFaceCrop(
                 face_crop_jpeg=jpeg_bytes,
                 spoofing_type=spoofing_type,
@@ -579,11 +550,11 @@ class SessionManager(LoggerMixin):
                 frame_count=frame_count
             )
             
-            # Lưu vào list
+            # LÆ°u vÃ o list
             session.spoof_faces_crops.append(spoof_data)
             
             self.logger.info(
-                f"✅ Stored spoof #{len(session.spoof_faces_crops)} (compressed)",
+                f"âœ… Stored spoof #{len(session.spoof_faces_crops)} (compressed)",
                 session_id=session_id,
                 spoofing_type=spoofing_type,
                 confidence=f"{spoofing_confidence:.1%}",
@@ -595,10 +566,10 @@ class SessionManager(LoggerMixin):
     
     async def get_spoof_faces_crops(self, session_id: str) -> List[SpoofFaceCrop]:
         """
-        Lấy tất cả spoof face crops trong session.
+        Láº¥y táº¥t cáº£ spoof face crops trong session.
         
         Args:
-            session_id: ID của session
+            session_id: ID cá»§a session
             
         Returns:
             List of SpoofFaceCrop objects
@@ -612,7 +583,7 @@ class SessionManager(LoggerMixin):
             return session.spoof_faces_crops.copy()
     
     def _session_data_to_response(self, session_data: SessionData) -> SessionResponse:
-        """Chuyển đổi SessionData thành SessionResponse"""
+        """Chuyá»ƒn Ä‘á»•i SessionData thÃ nh SessionResponse"""
         return SessionResponse(
             session_id=session_data.session_id,
             class_id=session_data.class_id,
@@ -624,7 +595,7 @@ class SessionManager(LoggerMixin):
         )
     
     def _is_session_expired(self, session_data: SessionData) -> bool:
-        """Kiểm tra session có hết hạn không"""
+        """Kiá»ƒm tra session cÃ³ háº¿t háº¡n khÃ´ng"""
         if session_data.status != "active":
             return True
         

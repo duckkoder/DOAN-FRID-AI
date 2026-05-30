@@ -1,5 +1,5 @@
-"""
-Face Engine - Orchestrator cho face detection và recognition services
+﻿"""
+Face Engine - Orchestrator cho face detection vÃ  recognition services
 """
 import base64
 import io
@@ -18,8 +18,8 @@ from app.core.config import settings
 
 class FaceEngine(LoggerMixin):
     """
-    Face detection và recognition engine orchestrator
-    Kết hợp các services: detection, recognition, embedding management, validation
+    Face detection vÃ  recognition engine orchestrator
+    Káº¿t há»£p cÃ¡c services: detection, recognition, embedding management, validation
     """
     
     def __init__(
@@ -28,17 +28,17 @@ class FaceEngine(LoggerMixin):
         recognizer_service=None,
         embedding_manager=None,
         recognition_validator=None,
-        anti_spoofing_service=None  # ✅ THÊM PARAMETER MỚI
+        anti_spoofing_service=None  # âœ… THÃŠM PARAMETER Má»šI
     ):
         """
-        Khởi tạo FaceEngine
+        Khá»Ÿi táº¡o FaceEngine
         
         Args:
             detector_service: FaceDetectionService instance (optional)
             recognizer_service: FaceRecognitionService instance (optional)
             embedding_manager: EmbeddingManager instance (optional)
             recognition_validator: RecognitionValidator instance (optional)
-            anti_spoofing_service: AntiSpoofingService instance (optional) ✅ MỚI
+            anti_spoofing_service: AntiSpoofingService instance (optional) âœ… Má»šI
         """
         super().__init__()
         
@@ -46,7 +46,7 @@ class FaceEngine(LoggerMixin):
         self.recognizer = recognizer_service
         self.embedding_manager = embedding_manager
         self.validator = recognition_validator
-        self.anti_spoofing = anti_spoofing_service  # ✅ THÊM ATTRIBUTE MỚI
+        self.anti_spoofing = anti_spoofing_service  # âœ… THÃŠM ATTRIBUTE Má»šI
         self._next_track_id = 1
         
         self.logger.info(
@@ -55,15 +55,15 @@ class FaceEngine(LoggerMixin):
             has_recognizer=self.recognizer is not None,
             has_embedding_manager=self.embedding_manager is not None,
             has_validator=self.validator is not None,
-            has_anti_spoofing=self.anti_spoofing is not None  # ✅ THÊM LOG MỚI
+            has_anti_spoofing=self.anti_spoofing is not None  # âœ… THÃŠM LOG Má»šI
         )
     
     async def detect_faces(self, frame_data: Optional[bytes] = None) -> tuple[List[Detection], List[np.ndarray], np.ndarray]:
         """
-        Detect faces trong frame - TRẢ VỀ CROPS giống endpoint /detect
+        Detect faces in a frame and return crops for the WebSocket flow
         
         Args:
-            frame_data: Raw frame data (bytes hoặc base64)
+            frame_data: Raw frame data (bytes hoáº·c base64)
             
         Returns:
             Tuple of (detections, crops, original_image)
@@ -89,7 +89,7 @@ class FaceEngine(LoggerMixin):
             # Convert BGR to RGB
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
             
-            # ✅ MEMORY OPTIMIZATION: Resize image nếu quá lớn (giảm VRAM usage)
+            # âœ… MEMORY OPTIMIZATION: Resize image náº¿u quÃ¡ lá»›n (giáº£m VRAM usage)
             h, w = image_rgb.shape[:2]
             max_size = 1280  # Max dimension
             if max(h, w) > max_size:
@@ -98,17 +98,17 @@ class FaceEngine(LoggerMixin):
                 image_rgb = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
                 self.logger.debug(f"Resized image from {w}x{h} to {new_w}x{new_h}")
             
-            # ✅ Ensure contiguous memory layout
+            # âœ… Ensure contiguous memory layout
             if not image_rgb.flags['C_CONTIGUOUS']:
                 image_rgb = np.ascontiguousarray(image_rgb)
             
-            # Detect faces - ✅ RETURN CROPS GIỐNG /detect ENDPOINT
+            # Detect faces and return crops for recognition/anti-spoofing
             detections, crops, _ = await self.detector.detect_faces_async(
                 image_rgb,
                 return_crops=True
             )
             
-            # ✅ MEMORY: Giải phóng image_array sau khi decode xong
+            # âœ… MEMORY: Giáº£i phÃ³ng image_array sau khi decode xong
             del image_array
             del image_bgr
             
@@ -124,7 +124,7 @@ class FaceEngine(LoggerMixin):
                 api_det = Detection(
                     bbox=[float(x) for x in det.bbox],
                     confidence=float(det.confidence),
-                    track_id=None  # ✅ Let tracker assign track_id
+                    track_id=None  # âœ… Let tracker assign track_id
                 )
                 api_detections.append(api_det)
             
@@ -138,24 +138,24 @@ class FaceEngine(LoggerMixin):
     async def recognize_faces(
         self,
         detections: List[Detection],
-        crops: List[np.ndarray],  # ✅ THÊM CROPS PARAMETER
+        crops: List[np.ndarray],  # âœ… THÃŠM CROPS PARAMETER
         gallery_embeddings: Optional[Any] = None,  # torch.Tensor
         gallery_labels: Optional[List[str]] = None,
     ) -> List[Detection]:
         """
-        Nhận diện faces dựa trên embeddings database.
+        Nháº­n diá»‡n faces dá»±a trÃªn embeddings database.
 
-        ✅ Phase 3: True Batch GPU Inference - toàn bộ N faces được gom
-        thành 1 tensor và đẩy qua GPU trong 1 lần duy nhất thay vì N lần.
+        âœ… Phase 3: True Batch GPU Inference - toÃ n bá»™ N faces Ä‘Æ°á»£c gom
+        thÃ nh 1 tensor vÃ  Ä‘áº©y qua GPU trong 1 láº§n duy nháº¥t thay vÃ¬ N láº§n.
 
         Args:
-            detections: Danh sách detections từ detect_faces
-            crops: Danh sách face crops từ detect_faces ✅
+            detections: Danh sÃ¡ch detections tá»« detect_faces
+            crops: Danh sÃ¡ch face crops tá»« detect_faces âœ…
             gallery_embeddings: Gallery embeddings tensor (N, 512) on GPU [from session]
             gallery_labels: Gallery labels (student codes) [from session]
 
         Returns:
-            Danh sách detections với thông tin recognition
+            Danh sÃ¡ch detections vá»›i thÃ´ng tin recognition
         """
         if self.recognizer is None:
             self.logger.warning("Recognizer not initialized")
@@ -172,7 +172,7 @@ class FaceEngine(LoggerMixin):
             return detections
 
         try:
-            # ── Thu thập valid crops và index tương ứng ──────────────────────
+            # â”€â”€ Thu tháº­p valid crops vÃ  index tÆ°Æ¡ng á»©ng â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             valid_crops: List[np.ndarray] = []
             valid_indices: List[int] = []
 
@@ -185,7 +185,7 @@ class FaceEngine(LoggerMixin):
                 self.logger.debug("No valid crops to recognize")
                 return detections
 
-            # ✅ Phase 3: 1 GPU call cho toàn bộ batch
+            # âœ… Phase 3: 1 GPU call cho toÃ n bá»™ batch
             self.logger.debug(f"Running TRUE BATCH recognition for {len(valid_crops)} faces (1 GPU call)")
             results = await self.recognizer.identify_batch_async(
                 valid_crops,
@@ -193,7 +193,7 @@ class FaceEngine(LoggerMixin):
                 gallery_labels=gallery_labels,
             )
 
-            # ── Gán kết quả vào detections ────────────────────────────────────
+            # â”€â”€ GÃ¡n káº¿t quáº£ vÃ o detections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             for idx, result in zip(valid_indices, results):
                 if result is None:
                     continue
@@ -222,14 +222,14 @@ class FaceEngine(LoggerMixin):
         bbox: List[float]
     ) -> Optional[List[float]]:
         """
-        Trích xuất face embeddings từ bounding box
+        TrÃ­ch xuáº¥t face embeddings tá»« bounding box
         
         Args:
             frame_data: Raw frame data
             bbox: Bounding box [x1, y1, x2, y2]
             
         Returns:
-            Face embedding vector hoặc None
+            Face embedding vector hoáº·c None
         """
         if self.recognizer is None:
             self.logger.warning("Recognizer not initialized")
@@ -261,7 +261,7 @@ class FaceEngine(LoggerMixin):
     
     async def load_embeddings_from_data(self, embeddings_data: bytes) -> dict:
         """
-        Load embeddings database từ data (từ S3)
+        Load embeddings database tá»« data (tá»« S3)
         
         Args:
             embeddings_data: Raw embeddings data (npz format)
@@ -285,10 +285,10 @@ class FaceEngine(LoggerMixin):
     
     def load_embeddings_from_directory(self, embedding_dir: Path) -> dict:
         """
-        Load embeddings từ thư mục
+        Load embeddings tá»« thÆ° má»¥c
         
         Args:
-            embedding_dir: Đường dẫn thư mục chứa embeddings
+            embedding_dir: ÄÆ°á»ng dáº«n thÆ° má»¥c chá»©a embeddings
             
         Returns:
             Database dictionary
@@ -305,7 +305,7 @@ class FaceEngine(LoggerMixin):
             return {}
     
     def get_database_stats(self) -> Dict[str, int]:
-        """Lấy thống kê database"""
+        """Láº¥y thá»‘ng kÃª database"""
         if self.recognizer is None:
             return {"num_people": 0, "total_vectors": 0}
         
@@ -317,11 +317,11 @@ class FaceEngine(LoggerMixin):
         timestamp: datetime
     ):
         """
-        Cập nhật lịch sử nhận diện vào validator
+        Cáº­p nháº­t lá»‹ch sá»­ nháº­n diá»‡n vÃ o validator
         
         Args:
-            detections: Danh sách detections với recognition info
-            timestamp: Thời điểm nhận diện
+            detections: Danh sÃ¡ch detections vá»›i recognition info
+            timestamp: Thá»i Ä‘iá»ƒm nháº­n diá»‡n
         """
         if self.validator is None:
             self.logger.warning("Validator is None - skipping recognition history update")
@@ -351,13 +351,13 @@ class FaceEngine(LoggerMixin):
         current_time: datetime
     ) -> Set[str]:
         """
-        Lấy danh sách sinh viên đã được validated (pass tất cả điều kiện)
+        Láº¥y danh sÃ¡ch sinh viÃªn Ä‘Ã£ Ä‘Æ°á»£c validated (pass táº¥t cáº£ Ä‘iá»u kiá»‡n)
         
         Args:
-            current_time: Thời điểm hiện tại
+            current_time: Thá»i Ä‘iá»ƒm hiá»‡n táº¡i
             
         Returns:
-            Set các student_id đã được validated và chưa gửi callback
+            Set cÃ¡c student_id Ä‘Ã£ Ä‘Æ°á»£c validated vÃ  chÆ°a gá»­i callback
         """
         if self.validator is None:
             self.logger.warning("Validator not initialized")
@@ -366,41 +366,41 @@ class FaceEngine(LoggerMixin):
         # Cleanup old confirmations
         self.validator.cleanup_old_confirmations(current_time)
         
-        # Lấy các sinh viên mới được validated
+        # Láº¥y cÃ¡c sinh viÃªn má»›i Ä‘Æ°á»£c validated
         validated_students = await self.validator.get_newly_confirmed_students(current_time)
         
         if validated_students:
-            self.logger.info(f"✅ Validated students: {list(validated_students)}")
+            self.logger.info(f"âœ… Validated students: {list(validated_students)}")
         
         return validated_students
     
     # ============================================================
-    # ✅ ANTI-SPOOFING CHECK - BATCH PROCESSING
+    # âœ… ANTI-SPOOFING CHECK - BATCH PROCESSING
     # ============================================================
     async def check_anti_spoofing(
         self,
         face_crops: List[np.ndarray]
     ) -> List[Dict[str, Any]]:
         """
-        Kiểm tra anti-spoofing cho danh sách face crops - BATCH PROCESSING
-        Model mới: ResNet18_MSFF_AntiSpoof với 2 classes (real/spoof)
+        Kiá»ƒm tra anti-spoofing cho danh sÃ¡ch face crops - BATCH PROCESSING
+        Model má»›i: ResNet18_MSFF_AntiSpoof vá»›i 2 classes (real/spoof)
         
         Args:
-            face_crops: Danh sách ảnh khuôn mặt đã crop (numpy arrays RGB)
+            face_crops: Danh sÃ¡ch áº£nh khuÃ´n máº·t Ä‘Ã£ crop (numpy arrays RGB)
             
         Returns:
-            Danh sách kết quả anti-spoofing:
+            Danh sÃ¡ch káº¿t quáº£ anti-spoofing:
             [
                 {
-                    'is_live': bool,      # True nếu real, False nếu spoof
-                    'label': str,         # 'real' hoặc 'spoof'
+                    'is_live': bool,      # True náº¿u real, False náº¿u spoof
+                    'label': str,         # 'real' hoáº·c 'spoof'
                     'confidence': float   # 0.0 - 1.0
                 },
                 ...
             ]
             
         Note:
-            Gom tất cả crops thành một batch và chạy model một lần.
+            Gom táº¥t cáº£ crops thÃ nh má»™t batch vÃ  cháº¡y model má»™t láº§n.
         """
         if not face_crops:
             return []
@@ -423,7 +423,7 @@ class FaceEngine(LoggerMixin):
             for i, result in enumerate(results):
                 if not result.get('is_live', True):
                     self.logger.warning(
-                        f"🚨 Spoof face detected in crop #{i}",
+                        f"ðŸš¨ Spoof face detected in crop #{i}",
                         label=result.get('label'),
                         confidence=f"{result.get('confidence', 0.0):.3f}"
                     )
@@ -460,17 +460,17 @@ def initialize_face_engine(
     recognizer_service=None,
     embedding_manager=None,
     recognition_validator=None,
-    anti_spoofing_service=None  # ✅ THÊM PARAMETER MỚI
+    anti_spoofing_service=None  # âœ… THÃŠM PARAMETER Má»šI
 ) -> FaceEngine:
     """
-    Khởi tạo global face engine
+    Khá»Ÿi táº¡o global face engine
     
     Args:
         detector_service: FaceDetectionService instance
         recognizer_service: FaceRecognitionService instance
         embedding_manager: EmbeddingManager instance
         recognition_validator: RecognitionValidator instance
-        anti_spoofing_service: AntiSpoofingService instance ✅ MỚI
+        anti_spoofing_service: AntiSpoofingService instance âœ… Má»šI
         
     Returns:
         FaceEngine instance
@@ -481,21 +481,21 @@ def initialize_face_engine(
         recognizer_service=recognizer_service,
         embedding_manager=embedding_manager,
         recognition_validator=recognition_validator,
-        anti_spoofing_service=anti_spoofing_service  # ✅ THÊM PARAMETER MỚI
+        anti_spoofing_service=anti_spoofing_service  # âœ… THÃŠM PARAMETER Má»šI
     )
     return face_engine
 
 
 def get_face_engine() -> FaceEngine:
     """
-    Lấy global face engine instance
+    Láº¥y global face engine instance
     
     Returns:
         FaceEngine instance
         
     Raises:
-        RuntimeError: Nếu face engine chưa được khởi tạo
+        RuntimeError: Náº¿u face engine chÆ°a Ä‘Æ°á»£c khá»Ÿi táº¡o
     """
     if face_engine is None:
-        raise RuntimeError("FaceEngine chưa được khởi tạo. Gọi initialize_face_engine() trước.")
+        raise RuntimeError("FaceEngine chÆ°a Ä‘Æ°á»£c khá»Ÿi táº¡o. Gá»i initialize_face_engine() trÆ°á»›c.")
     return face_engine

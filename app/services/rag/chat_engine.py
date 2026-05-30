@@ -1,32 +1,31 @@
-"""
-RAG Chat Engine using google-genai streaming.
-AI service only performs retrieval and generation.
-"""
+"""RAG Chat Engine using google-genai streaming."""
 from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncGenerator, List, Literal, Optional
+from typing import AsyncGenerator, List, Literal
 
 from google import genai
-
-from app.core.config import settings
-from app.services.rag.retriever import hybrid_retrieve
 
 logger = logging.getLogger(__name__)
 
 CreativityMode = Literal["strict", "expanded"]
 DetailLevel = Literal["brief", "normal", "detailed"]
 
-_client: Optional[genai.Client] = None
+_tenant_clients: dict[str, genai.Client] = {}
 
 
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        logger.info("Google GenAI Client initialized")
-    return _client
+def _get_client_for_key(api_key: str | None) -> genai.Client:
+    if not api_key:
+        raise ValueError("gemini_api_key is required")
+
+    fingerprint = api_key[-8:]
+    client = _tenant_clients.get(api_key)
+    if client is None:
+        client = genai.Client(api_key=api_key)
+        _tenant_clients[api_key] = client
+        logger.info("Tenant Google GenAI Client initialized key_suffix=%s", fingerprint)
+    return client
 
 
 _BASE_PROMPT = """Bạn là trợ lý học tập cho hệ thống lớp học trực tuyến.
@@ -97,11 +96,13 @@ async def stream_answer(
     document_ids: List[str],
     creativity_mode: CreativityMode = "strict",
     detail_level: DetailLevel = "normal",
+    gemini_api_key: str | None = None,
+    context_chunks: List[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
-    Retrieve relevant chunks, ask Gemini, then emit SSE events.
+    Ask Gemini from backend-provided context, then emit SSE events.
     """
-    chunks = hybrid_retrieve(question, document_ids, top_k=5)
+    chunks = context_chunks or []
 
     if not chunks and creativity_mode == "strict":
         no_doc_msg = (
@@ -122,7 +123,7 @@ async def stream_answer(
     )
 
     try:
-        client = _get_client()
+        client = _get_client_for_key(gemini_api_key)
         response = await client.aio.models.generate_content_stream(
             model="gemini-2.5-flash-lite",
             contents=full_prompt,

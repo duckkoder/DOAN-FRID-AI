@@ -5,6 +5,8 @@ Script khởi chạy AI-Service
 import os
 import uvicorn
 
+from app.core.config import settings
+
 if __name__ == "__main__":
     # Set default environment variables nếu chưa có
     os.environ.setdefault('JWT_SECRET', 'default-secret-key-change-in-production')
@@ -17,5 +19,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8096,
         reload=True,
-        log_level="info"
+        log_level=settings.LOG_LEVEL.lower(),
+        access_log=settings.ACCESS_LOG,
     )
