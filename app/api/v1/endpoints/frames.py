@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException, status, WebSocket, WebSocketDiscon
 from app.models.schemas import FrameRequest, FrameResponse, AttendanceUpdate
 from app.services.session_manager import session_manager
 from app.services.face_engine import get_face_engine
-from app.services.notifier import backend_notifier
 from app.core.config import settings
 from app.core.logging import get_logger
 

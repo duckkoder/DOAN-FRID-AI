@@ -1,5 +1,5 @@
 ﻿"""
-Notifier Service - Gá»­i callback vá» backend vá»›i HMAC signature
+Notifier Service - Gửi callback về backend với HMAC signature
 """
 import asyncio
 import hmac
@@ -23,7 +23,7 @@ class NotificationError(Exception):
 
 class BackendNotifier(LoggerMixin):
     """
-    Service gá»­i callback vá» backend
+    Service gửi callback về backend
     TODO: Implement retry logic, circuit breaker, dead letter queue
     """
     
@@ -53,15 +53,15 @@ class BackendNotifier(LoggerMixin):
         session_id: str
     ) -> bool:
         """
-        Gá»­i cáº­p nháº­t Ä‘iá»ƒm danh vá» backend
+        Gửi cập nhật điểm danh về backend
         
         Args:
-            callback_url: URL callback cá»§a backend
-            attendance_data: Dá»¯ liá»‡u Ä‘iá»ƒm danh
-            session_id: ID session Ä‘á»ƒ logging
+            callback_url: URL callback của backend
+            attendance_data: Dữ liệu điểm danh
+            session_id: ID session để logging
             
         Returns:
-            True náº¿u gá»­i thÃ nh cÃ´ng, False náº¿u tháº¥t báº¡i
+            True nếu gửi thành công, False nếu thất bại
         """
         logger = self.get_contextual_logger(session_id=session_id)
         
@@ -100,7 +100,7 @@ class BackendNotifier(LoggerMixin):
             
             logger.debug("Generated HMAC signature", signature_preview=signature[:16])
             
-            # Send POST request to backend webhook vá»›i signature header
+            # Send POST request to backend webhook với signature header
             response = await self.client.post(
                 callback_url,
                 json=payload,
@@ -139,7 +139,7 @@ class BackendNotifier(LoggerMixin):
         session_id: str
     ) -> bool:
         """
-        Gá»­i attendance update vá»›i retry logic
+        Gửi attendance update với retry logic
         
         TODO: Implement exponential backoff, jitter
         """

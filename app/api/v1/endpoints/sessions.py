@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(request: SessionCreateRequest):
     """
-    Táº¡o session má»›i vÃ  load embeddings vÃ o VRAM.
+    Tạo session mới và load embeddings vào VRAM.
     
     Flow:
     1. Backend sends student_codes and face_embeddings from tenant DB
@@ -26,13 +26,13 @@ async def create_session(request: SessionCreateRequest):
     3. Return session info
     
     Args:
-        request: SessionCreateRequest vá»›i student_codes
+        request: SessionCreateRequest với student_codes
         
     Returns:
-        ThÃ´ng tin session Ä‘Ã£ táº¡o vá»›i embeddings loaded
+        Thông tin session đã tạo với embeddings loaded
         
     Raises:
-        HTTPException: Náº¿u cÃ³ lá»—i khi táº¡o session hoáº·c load embeddings
+        HTTPException: Nếu có lỗi khi tạo session hoặc load embeddings
     """
     try:
         # Validate request
@@ -48,7 +48,7 @@ async def create_session(request: SessionCreateRequest):
             student_count=len(request.student_codes)
         )
         
-        # Táº¡o session vÃ  load embeddings vÃ o VRAM
+        # Tạo session và load embeddings vào VRAM
         session = await session_manager.create_session(request)
         
         if not session.embeddings_loaded:
@@ -83,16 +83,16 @@ async def create_session(request: SessionCreateRequest):
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str):
     """
-    Láº¥y thÃ´ng tin session
+    Lấy thông tin session
     
     Args:
-        session_id: ID cá»§a session
+        session_id: ID của session
         
     Returns:
-        ThÃ´ng tin session
+        Thông tin session
         
     Raises:
-        HTTPException: Náº¿u session khÃ´ng tá»“n táº¡i
+        HTTPException: Nếu session không tồn tại
     """
     session = await session_manager.get_session(session_id)
     
@@ -109,22 +109,22 @@ async def get_session(session_id: str):
 @router.get("/sessions/{session_id}/face-crops")
 async def get_session_face_crops(session_id: str):
     """
-    Láº¥y táº¥t cáº£ áº£nh face crops cá»§a students Ä‘Ã£ validated trong session.
-    Endpoint nÃ y Ä‘Æ°á»£c Backend gá»i khi end_session Ä‘á»ƒ upload áº£nh lÃªn S3.
+    Lấy tất cả ảnh face crops của students đã validated trong session.
+    Endpoint này được Backend gọi khi end_session để upload ảnh lên S3.
     
     Args:
-        session_id: ID cá»§a session
+        session_id: ID của session
         
     Returns:
         List of {student_code, face_crop_base64}
         
     Raises:
-        HTTPException: Náº¿u session khÃ´ng tá»“n táº¡i
+        HTTPException: Nếu session không tồn tại
     """
     import base64
     import cv2
     
-    # Láº¥y crops tá»« session memory
+    # Lấy crops từ session memory
     crops_dict = await session_manager.get_validated_students_crops(session_id)
     
     if not crops_dict:
@@ -172,22 +172,22 @@ async def get_session_face_crops(session_id: str):
 @router.get("/sessions/{session_id}/spoof-faces")
 async def get_session_spoof_faces(session_id: str):
     """
-    Láº¥y táº¥t cáº£ áº£nh spoof faces phÃ¡t hiá»‡n trong session.
-    Endpoint nÃ y Ä‘Æ°á»£c Backend gá»i khi end_session Ä‘á»ƒ upload áº£nh giáº£ máº¡o lÃªn S3.
+    Lấy tất cả ảnh spoof faces phát hiện trong session.
+    Endpoint này được Backend gọi khi end_session để upload ảnh giả mạo lên S3.
     
     Args:
-        session_id: ID cá»§a session
+        session_id: ID của session
         
     Returns:
         List of {face_crop_base64, spoofing_type, spoofing_confidence, detected_at, frame_count}
         
     Raises:
-        HTTPException: Náº¿u session khÃ´ng tá»“n táº¡i
+        HTTPException: Nếu session không tồn tại
     """
     import base64
     import cv2
     
-    # Láº¥y spoof crops tá»« session memory
+    # Lấy spoof crops từ session memory
     spoof_crops = await session_manager.get_spoof_faces_crops(session_id)
     
     if not spoof_crops:
@@ -239,16 +239,16 @@ async def get_session_spoof_faces(session_id: str):
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """
-    XÃ³a session
+    Xóa session
     
     Args:
-        session_id: ID cá»§a session
+        session_id: ID của session
         
     Returns:
         Success message
         
     Raises:
-        HTTPException: Náº¿u session khÃ´ng tá»“n táº¡i
+        HTTPException: Nếu session không tồn tại
     """
     success = await session_manager.delete_session(session_id)
     
