@@ -50,6 +50,14 @@ def _detection_to_dict(detection) -> Dict[str, Any]:
     }
 
 
+def _image_dimensions(image) -> Dict[str, int]:
+    if image is None:
+        return {"frame_width": 0, "frame_height": 0}
+
+    height, width = image.shape[:2]
+    return {"frame_width": int(width), "frame_height": int(height)}
+
+
 @router.post("/sessions/{session_id}/frames", response_model=FrameResponse)
 async def process_frame(
     session_id: str,
@@ -417,6 +425,7 @@ async def stream_frames(
                 
                 # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
+                frame_dimensions = _image_dimensions(original_image)
                 ws_logger.debug(f"[Frame {frame_count}] Detected {len(detections)} faces")
                 should_run_heavy = (frame_count - 1) % heavy_process_interval == 0
 
@@ -433,6 +442,7 @@ async def stream_frames(
                         "real_faces": 0,
                         "spoof_faces": 0,
                         "heavy_processed": False,
+                        **frame_dimensions,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
 
@@ -525,6 +535,7 @@ async def stream_frames(
                         "total_faces": len(detections),
                         "real_faces": 0,
                         "spoof_faces": spoof_count,
+                        **frame_dimensions,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
                     continue
@@ -538,6 +549,7 @@ async def stream_frames(
                         "total_faces": 0,
                         "real_faces": 0,
                         "spoof_faces": 0,
+                        **frame_dimensions,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
                     continue
@@ -652,6 +664,7 @@ async def stream_frames(
                     "total_faces": len(detections),
                     "real_faces": real_count,
                     "spoof_faces": spoof_count,
+                    **frame_dimensions,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
                 
