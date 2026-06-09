@@ -11,9 +11,9 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Callable, Any, Optional
-import os
 
 from app.core.logging import LoggerMixin
+from app.core.config import settings
 
 
 # ---------------------------------------------------------------------------
@@ -33,28 +33,30 @@ class ExecutorManager(LoggerMixin):
 
     def __init__(self) -> None:
         super().__init__()
-        cpu_count = os.cpu_count() or 4
+        face_workers = max(1, settings.AI_FACE_WORKERS)
+        rag_workers = max(1, settings.AI_RAG_WORKERS)
+        io_workers = max(1, settings.AI_IO_WORKERS)
 
         # Real-time AI: 4 thread (GPU là bottleneck thực sự, không phải CPU thread)
         self._face_executor = ThreadPoolExecutor(
-            max_workers=4,
+            max_workers=face_workers,
             thread_name_prefix="face_worker"
         )
 
         # RAG / Text Embedding: 1 thread, tránh chiếm hết CPU khi embed tài liệu lớn
         self._rag_executor = ThreadPoolExecutor(
-            max_workers=1,
+            max_workers=rag_workers,
             thread_name_prefix="rag_worker"
         )
 
         # I/O: callbacks, file reads, v.v.
         self._io_executor = ThreadPoolExecutor(
-            max_workers=max(2, cpu_count - 2),
+            max_workers=io_workers,
             thread_name_prefix="io_worker"
         )
 
         # Cached max_workers for legacy compat
-        self.max_workers = 3
+        self.max_workers = face_workers
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 

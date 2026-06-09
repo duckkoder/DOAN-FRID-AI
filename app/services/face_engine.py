@@ -433,7 +433,7 @@ class FaceEngine(LoggerMixin):
             live_count = sum(1 for r in results if r['is_live'])
             spoof_count = total - live_count
             
-            self.logger.info(
+            self.logger.debug(
                 "Anti-spoofing batch completed",
                 total_faces=total,
                 real_faces=live_count,

@@ -198,8 +198,9 @@ async def get_session_spoof_faces(session_id: str):
     spoof_faces_data = []
     for idx, spoof_data in enumerate(spoof_crops):
         try:
-            # Convert RGB to BGR for cv2
-            face_crop_bgr = cv2.cvtColor(spoof_data.face_crop, cv2.COLOR_RGB2BGR)
+            # Spoof crops are stored compressed in memory.
+            face_crop = spoof_data.get_face_crop()
+            face_crop_bgr = cv2.cvtColor(face_crop, cv2.COLOR_RGB2BGR)
             
             # Encode to JPEG bytes
             success, buffer = cv2.imencode('.jpg', face_crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])

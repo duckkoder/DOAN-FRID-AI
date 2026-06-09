@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     
     # RAG embedding model (default: vietnamese-bi-encoder)
     RAG_BI_ENCODER_MODEL: str = "bkai-foundation-models/vietnamese-bi-encoder"
+    RAG_EMBEDDING_DEVICE: str = "cpu"
+    RAG_EMBEDDING_BATCH_SIZE: int = 16
+
+    # Worker pools. On g4dn.xlarge, keep RAG small so attendance owns GPU/CPU.
+    AI_FACE_WORKERS: int = 4
+    AI_RAG_WORKERS: int = 1
+    AI_IO_WORKERS: int = 2
 
     # Model Paths - Quan trá»ng cho AWS
     EMBEDDING_DIR: str = ""
@@ -57,7 +64,6 @@ class Settings(BaseSettings):
 
     # Anti-spoofing settings
     ANTISPOOFING_THRESHOLD: float
-    ANTISPOOFING_BLOCK_RECOGNITION: bool
     
     # Dynamic threshold settings
     REC_ENABLE_DYNAMIC_THRESHOLD: bool
@@ -84,8 +90,11 @@ class Settings(BaseSettings):
     RECOGNITION_WINDOW_SIZE: int
     RECOGNITION_MIN_FRAME_SUCCESS_RATE: float
     RECOGNITION_DEBOUNCE_SECONDS: int = 30
+    RECOGNITION_AUTO_ADJUST_TO_FPS: bool = False
+    RECOGNITION_TARGET_FPS: float = 5.0
 
     # Attendance stream throttling/cache settings
+    ATTENDANCE_DETECTION_INTERVAL: int = 1
     ATTENDANCE_HEAVY_PROCESS_FACE_THRESHOLD: int = 8
     ATTENDANCE_HEAVY_PROCESS_INTERVAL: int = 3
     ATTENDANCE_RECOGNITION_CACHE_TTL_FRAMES: int = 8

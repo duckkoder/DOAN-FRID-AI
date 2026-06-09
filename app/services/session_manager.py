@@ -253,7 +253,10 @@ class SessionManager(LoggerMixin):
                 use_iou=True  # âœ… Sá»­ dá»¥ng IoU thay vÃ¬ distance
             )
             
-            # Táº¡o RecognitionValidator per-session vá»›i auto-adjust FPS
+            auto_adjust_to_fps = getattr(settings, 'RECOGNITION_AUTO_ADJUST_TO_FPS', False)
+            target_fps = getattr(settings, 'RECOGNITION_TARGET_FPS', 5.0)
+
+            # Táº¡o RecognitionValidator per-session
             recognition_validator = create_recognition_validator(
                 face_tracker=face_tracker,
                 confirmation_threshold=getattr(settings, 'RECOGNITION_CONFIRMATION_THRESHOLD', 3),
@@ -261,8 +264,8 @@ class SessionManager(LoggerMixin):
                 min_avg_confidence=getattr(settings, 'RECOGNITION_MIN_AVG_CONFIDENCE', 0.5),
                 min_success_rate=getattr(settings, 'RECOGNITION_MIN_FRAME_SUCCESS_RATE', 0.6),
                 debounce_seconds=getattr(settings, 'RECOGNITION_DEBOUNCE_SECONDS', 30),
-                auto_adjust_to_fps=True,  # âœ… Tá»± Ä‘á»™ng Ä‘iá»u chá»‰nh theo FPS
-                target_fps=5.0
+                auto_adjust_to_fps=auto_adjust_to_fps,
+                target_fps=target_fps
             )
             
             # LÆ°u vÃ o session data
@@ -273,7 +276,8 @@ class SessionManager(LoggerMixin):
                 "Per-session Tracker and Validator initialized",
                 session_id=session_data.session_id,
                 use_iou=True,
-                auto_adjust_fps=True
+                auto_adjust_fps=auto_adjust_to_fps,
+                target_fps=target_fps
             )
             
         except Exception as e:

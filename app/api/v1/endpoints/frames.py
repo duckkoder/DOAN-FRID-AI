@@ -2,6 +2,7 @@
 Frame processing endpoints with WebSocket support
 """
 import gc
+import asyncio
 import time
 from datetime import datetime, timezone
 
@@ -198,8 +199,13 @@ async def stream_frames(
         
         # Rate limiting variables
         frame_count = 0
-        last_frame_time = time.time()
+        last_frame_time = 0.0
         validated_students_sent = set()  # Track Ä‘Ã£ gá»­i Ä‘á»ƒ trÃ¡nh duplicate
+        cached_detections_data = []
+        cached_total_faces = 0
+        cached_real_faces = None
+        cached_spoof_faces = None
+        last_detection_frame = 0
         
         # âœ… MEMORY: Max faces per frame tá»« config
         MAX_FACES_PER_FRAME = app_settings.MEMORY_MAX_FACES_PER_FRAME
@@ -213,6 +219,19 @@ async def stream_frames(
                 # Rate limiting: Max 30 FPS
                 current_time = time.time()
                 if current_time - last_frame_time < 1/30:
+                    del frame_data
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "processing_stage": "completed",
+                        "heavy_processed": False,
+                        "detections": cached_detections_data,
+                        "total_faces": cached_total_faces,
+                        "real_faces": cached_real_faces,
+                        "spoof_faces": cached_spoof_faces,
+                        "rate_limited": True,
+                        "source_frame_count": last_detection_frame,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
                     continue
                 
                 # âœ… FIX: Cáº­p nháº­t last_frame_time ngay sau khi quyáº¿t Ä‘á»‹nh xá»­ lÃ½ frame
@@ -228,6 +247,31 @@ async def stream_frames(
                     continue
                 
                 frame_count += 1
+
+                detection_interval = max(1, app_settings.ATTENDANCE_DETECTION_INTERVAL)
+                should_run_detection = (
+                    frame_count == 1
+                    or last_detection_frame == 0
+                    or ((frame_count - 1) % detection_interval == 0)
+                )
+
+                if not should_run_detection:
+                    del frame_data
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "processing_stage": "completed",
+                        "heavy_processed": False,
+                        "frame_count": frame_count,
+                        "detections": cached_detections_data,
+                        "total_faces": cached_total_faces,
+                        "real_faces": cached_real_faces,
+                        "spoof_faces": cached_spoof_faces,
+                        "reused_detection": True,
+                        "source_frame_count": last_detection_frame,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    await session_manager.increment_frame_count(session_id)
+                    continue
                 
                 # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
@@ -253,6 +297,11 @@ async def stream_frames(
                 # Chá»‰ gá»­i 1 message duy nháº¥t 'completed' sau khi xá»­ lÃ½ xong.
 
                 if not detections:
+                    cached_detections_data = []
+                    cached_total_faces = 0
+                    cached_real_faces = 0
+                    cached_spoof_faces = 0
+                    last_detection_frame = frame_count
                     await websocket.send_json({
                         "type": "frame_processed",
                         "processing_stage": "completed",
@@ -275,12 +324,8 @@ async def stream_frames(
                     del detections, crops, original_image
                     continue
 
-                heavy_face_threshold = app_settings.ATTENDANCE_HEAVY_PROCESS_FACE_THRESHOLD
                 heavy_interval = max(1, app_settings.ATTENDANCE_HEAVY_PROCESS_INTERVAL)
-                should_run_heavy = (
-                    len(detections) <= heavy_face_threshold
-                    or ((frame_count - 1) % heavy_interval == 0)
-                )
+                should_run_heavy = (frame_count - 1) % heavy_interval == 0
 
                 if not should_run_heavy:
                     early_detections_data = [
@@ -309,6 +354,11 @@ async def stream_frames(
                         "spoof_faces": None,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
+                    cached_detections_data = early_detections_data
+                    cached_total_faces = len(detections)
+                    cached_real_faces = None
+                    cached_spoof_faces = None
+                    last_detection_frame = frame_count
                     await session_manager.increment_frame_count(session_id)
                     cleanup_result = memory_manager.periodic_cleanup()
                     if cleanup_result.get('cleaned'):
@@ -321,7 +371,10 @@ async def stream_frames(
                     continue
                 
                 # âœ… 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
-                real_crops = []  # Only real faces for recognition
+                # recognition_crops includes only live faces. Spoof faces are never
+                # recognized; they are only shown as alerts/evidence.
+                recognition_crops = []
+                recognition_indices = []
                 spoof_count = 0
                 real_count = 0
                 
@@ -347,8 +400,8 @@ async def stream_frames(
                         detection.spoofing_confidence = spoof_result['confidence']
 
                         if smoothed_live:
-                            # âœ… Real face - giá»¯ crop cho recognition
-                            real_crops.append(crop)
+                            recognition_crops.append(crop)
+                            recognition_indices.append(idx)
                             real_count += 1
                             ws_logger.debug(
                                 f"[Frame {frame_count}] âœ… REAL/LIVE face #{idx} (raw={raw_is_live}, smooth={smoothed_live})",
@@ -391,14 +444,14 @@ async def stream_frames(
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "total_spoof": spoof_count,
                             "total_real": real_count,
-                            "message": f"âš ï¸ Detected {spoof_count} spoof face(s) - They will be displayed in RED but not processed for recognition"
+                            "message": f"Detected {spoof_count} spoof face(s)"
                         })
                 
                 # âœ… KEEP detections (bao gá»“m cáº£ spoof faces Ä‘á»ƒ frontend hiá»ƒn thá»‹)
-                # crops Ä‘Æ°á»£c thay báº±ng real_crops (CHá»ˆ real faces cho recognition)
+                # Only live faces continue into recognition.
                 
                 # Náº¿u khÃ´ng cÃ³ real faces sau filter - VáºªN Gá»¬I spoof faces vá» Ä‘á»ƒ hiá»ƒn thá»‹
-                if real_count == 0 and spoof_count > 0:
+                if not recognition_crops and spoof_count > 0:
                     # Chá»‰ cÃ³ spoof faces - gá»­i vá» nhÆ°ng khÃ´ng lÃ m gÃ¬ thÃªm
                     ws_logger.warning(f"[Frame {frame_count}] Only spoof faces detected - sending to frontend for display")
                     
@@ -429,6 +482,15 @@ async def stream_frames(
                         "spoof_faces": spoof_count,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
+                    cached_detections_data = detections_data
+                    cached_total_faces = len(detections)
+                    cached_real_faces = 0
+                    cached_spoof_faces = spoof_count
+                    last_detection_frame = frame_count
+                    await session_manager.increment_frame_count(session_id)
+                    del detections, crops, original_image, recognition_crops
+                    if 'anti_spoofing_results' in locals():
+                        del anti_spoofing_results
                     continue
                 
                 # Náº¿u khÃ´ng cÃ³ faces nÃ o (cáº£ real láº«n spoof)
@@ -443,43 +505,39 @@ async def stream_frames(
                         "spoof_faces": 0,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
+                    cached_detections_data = []
+                    cached_total_faces = 0
+                    cached_real_faces = 0
+                    cached_spoof_faces = 0
+                    last_detection_frame = frame_count
+                    await session_manager.increment_frame_count(session_id)
+                    del detections, crops, original_image, recognition_crops
                     continue
                 
-                # 7. Recognize faces - CHá»ˆ vá»›i REAL face crops
-                # âš ï¸ CHÃš Ã: detections váº«n chá»©a Táº¤T Cáº¢ faces (real + spoof)
-                # NhÆ°ng chá»‰ real_crops Ä‘Æ°á»£c dÃ¹ng cho recognition
-                if real_count > 0:
-                    # Táº¡o mapping: index cá»§a real faces trong detections
-                    real_indices = [i for i, d in enumerate(detections) if d.is_live]
-                    
-                    # Recognize CHá»ˆ real faces
+                # 7. Recognize faces - only live faces are allowed.
+                if recognition_crops:
                     recognized_detections = await engine.recognize_faces(
-                        detections=[detections[i] for i in real_indices],
-                        crops=real_crops,
+                        detections=[detections[i] for i in recognition_indices],
+                        crops=recognition_crops,
                         gallery_embeddings=session.gallery_embeddings,
                         gallery_labels=session.gallery_labels
                     )
                     
-                    # Update láº¡i vÃ o detections gá»‘c (chá»‰ real faces)
-                    for i, idx in enumerate(real_indices):
+                    for i, idx in enumerate(recognition_indices):
                         detections[idx] = recognized_detections[i]
                     
                     ws_logger.debug(f"[Frame {frame_count}] Recognized {len([d for d in recognized_detections if d.student_code])} students")
                 else:
-                    ws_logger.debug(f"[Frame {frame_count}] No real faces to recognize")
+                    ws_logger.debug(f"[Frame {frame_count}] No faces allowed to recognize")
                 
                 # 8. âœ… Track faces - CHá»ˆ track REAL faces
-                if session.face_tracker and real_count > 0:
-                    # Track chá»‰ real faces
-                    real_detections_for_tracking = [d for d in detections if d.is_live]
-                    tracked_detections = await session.face_tracker.update(real_detections_for_tracking)
+                if session.face_tracker and recognition_indices:
+                    detections_for_tracking = [detections[i] for i in recognition_indices]
+                    tracked_detections = await session.face_tracker.update(detections_for_tracking)
                     
                     # Update track_id vÃ o detections gá»‘c
-                    tracked_idx = 0
-                    for i, d in enumerate(detections):
-                        if d.is_live:
-                            detections[i] = tracked_detections[tracked_idx]
-                            tracked_idx += 1
+                    for tracked_idx, detection_idx in enumerate(recognition_indices):
+                        detections[detection_idx] = tracked_detections[tracked_idx]
                     
                     ws_logger.debug(f"[Frame {frame_count}] Tracked faces: {[(d.track_id, d.student_id) for d in tracked_detections]}")
                 elif not session.face_tracker:
@@ -487,10 +545,10 @@ async def stream_frames(
                 
                 # 9. âœ… Update recognition history vÃ o per-session validator - CHá»ˆ REAL faces
                 current_timestamp = datetime.now(timezone.utc)
+                recognition_index_set = set(recognition_indices)
                 if session.recognition_validator:
-                    for detection in detections:
-                        # âš ï¸ CHá»ˆ update recognition history cho REAL faces
-                        if detection.is_live and detection.track_id and detection.student_id:
+                    for detection_idx, detection in enumerate(detections):
+                        if detection_idx in recognition_index_set and detection.track_id and detection.student_id:
                             await session.recognition_validator.add_recognition(
                                 track_id=detection.track_id,
                                 student_code=detection.student_id,  # Using student_code
@@ -502,17 +560,13 @@ async def stream_frames(
                 validated_student_ids = set()
                 
                 if session.recognition_validator:
-                    # Táº¡o mapping detection index -> real_crop index
-                    detection_to_crop_idx = {}
-                    real_idx = 0
-                    for i, det in enumerate(detections):
-                        if det.is_live:
-                            detection_to_crop_idx[i] = real_idx
-                            real_idx += 1
+                    detection_to_crop_idx = {
+                        detection_idx: crop_idx
+                        for crop_idx, detection_idx in enumerate(recognition_indices)
+                    }
                     
                     for i, detection in enumerate(detections):
-                        # âš ï¸ CHá»ˆ validate REAL faces
-                        if detection.is_live and detection.track_id:
+                        if i in recognition_index_set and detection.track_id:
                             validation_result = await session.recognition_validator.validate_recognition(
                                 track_id=detection.track_id,
                                 current_time=current_timestamp
@@ -524,11 +578,11 @@ async def stream_frames(
                                 # âœ… LÆ°u face crop vÃ o session memory (Ä‘á»ƒ láº¥y sau khi end_session)
                                 if i in detection_to_crop_idx:
                                     crop_idx = detection_to_crop_idx[i]
-                                    if crop_idx < len(real_crops):
+                                    if crop_idx < len(recognition_crops):
                                         await session_manager.store_validated_student_crop(
                                             session_id=session_id,
                                             student_code=student_code,
-                                            face_crop=real_crops[crop_idx]
+                                            face_crop=recognition_crops[crop_idx]
                                         )
                 
                 # 11. âœ… Send response vá»›i Táº¤T Cáº¢ detections (bao gá»“m cáº£ spoof faces)
@@ -559,6 +613,11 @@ async def stream_frames(
                     "spoof_faces": spoof_count,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
+                cached_detections_data = detections_data
+                cached_total_faces = len(detections)
+                cached_real_faces = real_count
+                cached_spoof_faces = spoof_count
+                last_detection_frame = frame_count
                 
                 # 11. Send student_validated messages (only new ones)
                 newly_validated = [student_id for student_id in validated_student_ids 
@@ -572,7 +631,10 @@ async def stream_frames(
                     for student_id in newly_validated:
                         # Find detection with this student_id to get track_id and student_name
                         # âš ï¸ CHá»ˆ tÃ¬m trong REAL faces (is_live = True)
-                        detection_with_student = next((d for d in detections if d.student_id == student_id and d.is_live), None)
+                        detection_with_student = next(
+                            (d for i, d in enumerate(detections) if d.student_id == student_id and i in recognition_index_set),
+                            None
+                        )
                         
                         if detection_with_student and detection_with_student.track_id and session.face_tracker:
                             # âœ… Get track state and stats tá»« per-session tracker
@@ -615,18 +677,18 @@ async def stream_frames(
                             timestamp=datetime.now(timezone.utc)
                         )
                         
-                        await _send_callback_async(
+                        asyncio.create_task(_send_callback_async(
                             session.backend_callback_url,
                             attendance_data,
                             session_id,
                             ws_logger
-                        )
+                        ))
                 
                 # 14. Increment frame counter
                 await session_manager.increment_frame_count(session_id)
                 
                 # âœ… MEMORY CLEANUP: Giáº£i phÃ³ng cÃ¡c objects khÃ´ng cáº§n thiáº¿t
-                del detections, crops, original_image, real_crops
+                del detections, crops, original_image, recognition_crops
                 # âœ… FIX: DÃ¹ng locals() thay dir() Ä‘á»ƒ kiá»ƒm tra biáº¿n local Ä‘Ãºng cÃ¡ch
                 if 'anti_spoofing_results' in locals():
                     del anti_spoofing_results
