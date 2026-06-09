@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 # Session related schemas
 class SessionCreateRequest(BaseModel):
+    face_embeddings: List[Dict[str, Any]] = Field(default_factory=list, description="Approved face embeddings supplied by Backend")
+    tenant_slug: str = Field(..., description="Tenant slug that owns this attendance session")
     """Request để tạo session mới"""
     backend_session_id: int = Field(..., description="Backend session ID để mapping")
     class_id: str = Field(..., description="ID của lớp học")

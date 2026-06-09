@@ -11,7 +11,6 @@ import numpy as np
 
 from app.models.schemas import SessionCreateRequest, SessionResponse
 from app.core.logging import LoggerMixin
-from app.services.database_service import get_database_service
 
 
 @dataclass
@@ -20,6 +19,7 @@ class SessionData:
     session_id: str
     backend_session_id: int  # Backend session ID để mapping
     class_id: str
+    tenant_slug: str
     backend_callback_url: str
     status: str
     created_at: datetime
@@ -71,6 +71,7 @@ class SessionManager(LoggerMixin):
                 session_id=session_id,
                 backend_session_id=request.backend_session_id,
                 class_id=request.class_id,
+                tenant_slug=request.tenant_slug,
                 backend_callback_url=request.backend_callback_url,
                 status="active",
                 created_at=datetime.now(timezone.utc),
@@ -83,7 +84,9 @@ class SessionManager(LoggerMixin):
             
             # BƯỚC 1: Query embeddings từ database (1 query duy nhất)
             try:
-                embeddings_data = await self._load_embeddings_from_database(request.student_codes)
+                embeddings_data = request.face_embeddings
+                if not embeddings_data:
+                    raise ValueError("face_embeddings is required")
                 
                 # BƯỚC 2: Load vào VRAM
                 await self._load_embeddings_to_vram(session_data, embeddings_data)
@@ -112,36 +115,6 @@ class SessionManager(LoggerMixin):
                 raise
             
             return self._session_data_to_response(session_data)
-    
-    async def _load_embeddings_from_database(self, student_codes: List[str]) -> List[Dict[str, Any]]:
-        """
-        BƯỚC 1: Query embeddings từ pgvector (1 lần DUY NHẤT).
-        
-        Args:
-            student_codes: List of student codes
-        
-        Returns:
-            List of embedding dictionaries
-        """
-        self.logger.info("Loading embeddings from database", student_count=len(student_codes))
-        
-        # Run sync database query in thread pool
-        loop = asyncio.get_event_loop()
-        db_service = get_database_service()
-        
-        embeddings_data = await loop.run_in_executor(
-            None,
-            db_service.get_embeddings_by_student_codes,
-            student_codes,
-            "approved"
-        )
-        
-        self.logger.info(
-            "Embeddings loaded from database",
-            embedding_count=len(embeddings_data)
-        )
-        
-        return embeddings_data
     
     async def _load_embeddings_to_vram(
         self,

@@ -2,6 +2,7 @@
 Frame processing endpoints with WebSocket support
 """
 import base64
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Set
@@ -12,6 +13,7 @@ from app.models.schemas import FrameRequest, FrameResponse, AttendanceUpdate
 from app.services.session_manager import session_manager
 from app.services.face_engine import get_face_engine
 from app.services.notifier import backend_notifier
+from app.core.config import settings
 from app.core.logging import get_logger
 
 router = APIRouter()
@@ -33,6 +35,20 @@ def get_engine():
                 detail="Face recognition service not available"
             )
     return face_engine
+
+
+def _detection_to_dict(detection) -> Dict[str, Any]:
+    return {
+        "bbox": detection.bbox,
+        "confidence": detection.confidence,
+        "track_id": detection.track_id,
+        "student_code": detection.student_code or "Unknown",
+        "student_name": detection.student_name or "Unknown",
+        "recognition_confidence": detection.recognition_confidence,
+        "is_live": detection.is_live,
+        "spoofing_type": detection.spoofing_type,
+        "spoofing_confidence": detection.spoofing_confidence
+    }
 
 
 @router.post("/sessions/{session_id}/frames", response_model=FrameResponse)
@@ -375,6 +391,7 @@ async def stream_frames(
         # Rate limiting variables
         frame_count = 0
         last_frame_time = time.time()
+        heavy_process_interval = max(1, settings.ATTENDANCE_HEAVY_PROCESS_INTERVAL)
         validated_students_sent = set()  # Track đã gửi để tránh duplicate
         
         # 5. Process frames
@@ -401,7 +418,27 @@ async def stream_frames(
                 
                 # 6. Detect faces
                 detections, crops, original_image = await engine.detect_faces(frame_data)
-                ws_logger.info(f"[Frame {frame_count}] Detected {len(detections)} faces")
+                ws_logger.debug(f"[Frame {frame_count}] Detected {len(detections)} faces")
+                should_run_heavy = (frame_count - 1) % heavy_process_interval == 0
+
+                # Fast path: detect + track every frame so the UI box follows the face smoothly.
+                if detections and not should_run_heavy:
+                    if session.face_tracker:
+                        detections = await session.face_tracker.update(detections)
+
+                    await websocket.send_json({
+                        "type": "frame_processed",
+                        "frame_count": frame_count,
+                        "detections": [_detection_to_dict(detection) for detection in detections],
+                        "total_faces": len(detections),
+                        "real_faces": 0,
+                        "spoof_faces": 0,
+                        "heavy_processed": False,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+
+                    await session_manager.increment_frame_count(session_id)
+                    continue
                 
                 # ✅ 6.5. ANTI-SPOOFING CHECK - Keep ALL faces but mark spoof status
                 real_crops = []  # Only real faces for recognition
@@ -674,12 +711,12 @@ async def stream_frames(
                             timestamp=datetime.now(timezone.utc)
                         )
                         
-                        await _send_callback_async(
+                        asyncio.create_task(_send_callback_async(
                             session.backend_callback_url,
                             attendance_data,
                             session_id,
                             ws_logger
-                        )
+                        ))
                 
                 # 14. Increment frame counter
                 await session_manager.increment_frame_count(session_id)

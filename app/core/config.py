@@ -2,6 +2,7 @@
 Cấu hình ứng dụng sử dụng pydantic-settings
 """
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -13,6 +14,9 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    ACCESS_LOG: bool = False
+    ENVIRONMENT: str = "development"
+    EMBEDDING_DIR: str = ""
     
     # Backend Integration
     BACKEND_JWT_SECRET: str = "jB9gwgsbOxaZXKWCTF8BsgYCgLOYROrnwbI4vJWa1T1zG4x0sFG63swllVES3yoj"  # Must match Backend SECRET_KEY
@@ -41,12 +45,12 @@ class Settings(BaseSettings):
     RECOGNIZER_CHECKPOINT: Optional[str] = None
     RECOGNIZER_THRESHOLD: float = 1.1
     RECOGNIZER_KNN_K: int = 5
+    RECOGNIZER_KNN_VOTING_THRESHOLD: float = 1.2
 
     # Anti-spoofing settings
     ANTISPOOFING_CHECKPOINT: Optional[str] = None
     ANTISPOOFING_THRESHOLD: float = 0.55
     ANTISPOOFING_DEVICE: str = "cuda"
-    ANTISPOOFING_BLOCK_RECOGNITION: bool = True  # ✅ Block recognition nếu anti-spoofing fail
     
     # Dynamic threshold settings
     REC_ENABLE_DYNAMIC_THRESHOLD: bool = True
@@ -67,27 +71,53 @@ class Settings(BaseSettings):
     REC_REQUIRE_STABLE: bool = False      # Yêu cầu stable qua temporal smoothing (để False cho đơn giản)
     REC_MAX_DISTANCE_RATIO: float = 0.85  # ✅ Distance phải < 90% threshold (chặt hơn để an toàn)
     
+    REC_MIN_VALID_NEIGHBORS_RATIO: float = 0.7
+
     # Recognition Validation Settings (Anti-premature detection)
     RECOGNITION_CONFIRMATION_THRESHOLD: int = 3  # Min recognition count in window (3/5 = 60%)
     RECOGNITION_WINDOW_SIZE: int = 5  # Number of recent frames to consider
     RECOGNITION_MIN_FRAME_SUCCESS_RATE: float = 0.60  # Min success rate (3/5 = 60%)
     RECOGNITION_DEBOUNCE_SECONDS: int = 30  # Cooldown before re-sending callback
-    
-    # PostgreSQL pgvector connection
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "ai_attendance"
-    POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "Ttd02042004%40"
-    
-    @property
-    def DATABASE_URL(self) -> str:
-        """Get PostgreSQL connection URL."""
-        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+    RECOGNITION_AUTO_ADJUST_TO_FPS: bool = False
+    RECOGNITION_TARGET_FPS: float = 5.0
+
+    # Worker / resource settings
+    AI_FACE_WORKERS: int = 4
+    AI_RAG_WORKERS: int = 1
+    AI_IO_WORKERS: int = 2
+    RAG_EMBEDDING_DEVICE: str = "cpu"
+    RAG_EMBEDDING_BATCH_SIZE: int = 16
+    RAG_BI_ENCODER_MODEL: str = "bkai-foundation-models/vietnamese-bi-encoder"
+
+    # Memory safety settings
+    MEMORY_GPU_THRESHOLD: float = 0.85
+    MEMORY_CLEANUP_INTERVAL: int = 50
+    MEMORY_MAX_FACES_PER_FRAME: int = 10
+    MEMORY_MAX_IMAGE_SIZE: int = 1280
+    MEMORY_MAX_SPOOF_CROPS: int = 50
+    MEMORY_AGGRESSIVE_GC: bool = True
+
+    # Attendance realtime tuning
+    ATTENDANCE_DETECTION_INTERVAL: int = 1
+    ATTENDANCE_HEAVY_PROCESS_FACE_THRESHOLD: int = 8
+    ATTENDANCE_HEAVY_PROCESS_INTERVAL: int = 2
+    ATTENDANCE_RECOGNITION_CACHE_TTL_FRAMES: int = 8
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "production", "prod"}:
+                return False
+            if normalized in {"development", "dev", "debug"}:
+                return True
+        return value
     
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 # Global settings instance
