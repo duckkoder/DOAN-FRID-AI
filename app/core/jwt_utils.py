@@ -61,13 +61,15 @@ def verify_websocket_token(token: str) -> Dict:
         user_id = payload.get("user_id")
         session_id = payload.get("session_id")
         role = payload.get("role")
+        tenant_slug = payload.get("tenant_slug")
         
-        if not all([user_id, session_id, role]):
+        if not all([user_id, session_id, role, tenant_slug]):
             logger.warning(
                 "Missing required fields in token",
                 user_id=user_id,
                 session_id=session_id,
-                role=role
+                role=role,
+                tenant_slug=tenant_slug,
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,6 +115,14 @@ def verify_user_permission(
             "Session ID mismatch",
             token_session_id=token_payload.get("session_id"),
             backend_session_id=backend_session_id
+        )
+        return False
+
+    if token_payload.get("tenant_slug") != session_data.tenant_slug:
+        logger.warning(
+            "Tenant slug mismatch",
+            token_tenant_slug=token_payload.get("tenant_slug"),
+            session_tenant_slug=session_data.tenant_slug,
         )
         return False
     
